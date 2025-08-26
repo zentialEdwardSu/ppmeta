@@ -90,7 +90,7 @@ namespace ppmeta
             var btnDefault = new Button { Text = "恢复默认", Width = 80 };
             var btnImport = new Button { Text = "导入配置", Width = 80 };
             var btnExport = new Button { Text = "导出配置", Width = 80 };
-            var btnPin = new Button { Text = "📌 置顶", Width = 80 };
+            var btnPin = new Button { Text = "Pin", Width = 80 };
             var btnPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
             btnPanel.Controls.Add(btnSave);
             btnPanel.Controls.Add(btnDefault);

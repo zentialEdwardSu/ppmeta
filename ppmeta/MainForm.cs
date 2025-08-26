@@ -88,6 +88,7 @@ namespace ppmeta
             
             ClearButton.Click += (s, e) =>
             {
+                if (e is MouseEventArgs me && me.Button != MouseButtons.Middle) return;
                 SrcTextBox.Clear();
             };
 
