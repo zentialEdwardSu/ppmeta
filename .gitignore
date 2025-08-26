@@ -1,0 +1,75 @@
+# Visual Studio files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+*.pdb
+*.exe
+*.dll
+*.exp
+*.lib
+*.ilk
+*.log
+*.ncb
+*.sbr
+*.res
+*.pch
+*.idb
+*.opt
+*.aps
+*.bak
+*.bsc
+*.cache
+*.obj
+*.tlb
+*.tlh
+*.tmp
+*.rsp
+*.pgm
+*.resources
+*.sdf
+*.vshost.*
+*.csproj.user
+*.vcxproj.user
+*.vbproj.user
+
+# NuGet packages
+packages/
+*.nupkg
+.nuget/
+!packages/build/
+
+# Resharper files
+_ReSharper*/
+*.DotSettings.user
+
+# Rider files
+.idea/
+
+# DotPeek files
+.dp/
+
+# Test results
+TestResults/
+
+# Local settings
+LocalSettings.xml
+
+# Azure Service Fabric
+PublishProfiles/
+*.pfx
+
+# Miscellaneous
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# User-specific files
+*.pubxml.user

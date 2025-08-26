@@ -1,0 +1,18 @@
+﻿<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+	<ribbon>
+		<tabs>
+			<tab id="customTab" label="ppMeta">
+				<group id="mainGroup" label="主要的">
+					<button id="openTextEditor" label="Open Editor" onAction="OnOpenMainClick"/>
+				</group>
+				<group id="toolsGroup" label="实用工具">
+					<button id="listFormatButton" label="List All format" onAction="OnFormatsClick"/>
+					<button id="listPlaceHolderButton" label="展示选定模板的占位符" onAction="OnPlaceHolderClick"/>
+				</group>
+				<group id="configGroup" label="配置">
+					<button id="optionsButton" label="选项" onAction="OnOptionsClick"/>
+				</group>
+			</tab>
+		</tabs>
+	</ribbon>
+</customUI>
