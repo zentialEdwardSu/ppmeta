@@ -1,38 +1,19 @@
-﻿using Microsoft.Office.Interop.PowerPoint;
-using System;
-using System.Collections.Generic;
+﻿using System;
 using System.IO;
-using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Text;
 using Office = Microsoft.Office.Core;
-
-// TODO:   按照以下步骤启用功能区(XML)项:
-
-// 1. 将以下代码块复制到 ThisAddin、ThisWorkbook 或 ThisDocument 类中。
-
-//  protected override Microsoft.Office.Core.IRibbonExtensibility CreateRibbonExtensibilityObject()
-//  {
-//      return new Ribbon1();
-//  }
-
-// 2. 在此类的“功能区回调”区域中创建回调方法，以处理用户
-//    操作(如单击某个按钮)。注意: 如果已经从功能区设计器中导出此功能区，
-//    则将事件处理程序中的代码移动到回调方法并修改该代码以用于
-//    功能区扩展性(RibbonX)编程模型。
-
-// 3. 向功能区 XML 文件中的控制标记分配特性，以标识代码中的相应回调方法。  
-
-// 有关详细信息，请参见 Visual Studio Tools for Office 帮助中的功能区 XML 文档。
-
 
 namespace ppmeta
 {
-    [ComVisible(true)]
+    [System.Runtime.InteropServices.ComVisible(true)]
     public class Ribbon1 : Office.IRibbonExtensibility
     {
         private Office.IRibbonUI ribbon;
+
+        // use static to keep instances alive
+        private static TextEditorForm textEditorForm;
+        private static FormatListForm formatListForm;
+        private static PlaceholderForm placeholderForm;
 
         public Ribbon1()
         {
@@ -40,15 +21,40 @@ namespace ppmeta
 
         public void OnOpenMainClick(Office.IRibbonControl control)
         {
-            var editor = new TextEditorForm();
-            editor.Show();
+            // check if the window is already open
+            if (textEditorForm != null && !textEditorForm.IsDisposed)
+            {
+                // bring the existing window to the front
+                textEditorForm.WindowState = System.Windows.Forms.FormWindowState.Normal;
+                textEditorForm.BringToFront();
+                textEditorForm.Activate();
+            }
+            else
+            {
+                // new windows
+                textEditorForm = new TextEditorForm();
+                // when the window is closed, clean up the reference
+                textEditorForm.FormClosed += (s, e) => textEditorForm = null;
+                textEditorForm.Show();
+            }
         }
 
         public void OnFormatsClick(Office.IRibbonControl control)
         {
             var ppt = Globals.ThisAddIn.Application.ActivePresentation;
-            var form = new FormatListForm(ppt);
-            form.Show();
+            
+            if (formatListForm != null && !formatListForm.IsDisposed)
+            {
+                formatListForm.WindowState = System.Windows.Forms.FormWindowState.Normal;
+                formatListForm.BringToFront();
+                formatListForm.Activate();
+            }
+            else
+            {
+                formatListForm = new FormatListForm(ppt);
+                formatListForm.FormClosed += (s, e) => formatListForm = null;
+                formatListForm.Show();
+            }
         }
 
         public void OnOptionsClick(Office.IRibbonControl control)
@@ -60,8 +66,19 @@ namespace ppmeta
         public void OnPlaceHolderClick(Office.IRibbonControl control)
         {
             var ppt = Globals.ThisAddIn.Application.ActivePresentation;
-            var form = new PlaceholderForm(ppt);
-            form.Show();
+            
+            if (placeholderForm != null && !placeholderForm.IsDisposed)
+            {
+                placeholderForm.WindowState = System.Windows.Forms.FormWindowState.Normal;
+                placeholderForm.BringToFront();
+                placeholderForm.Activate();
+            }
+            else
+            {
+                placeholderForm = new PlaceholderForm(ppt);
+                placeholderForm.FormClosed += (s, e) => placeholderForm = null;
+                placeholderForm.Show();
+            }
         }
 
 

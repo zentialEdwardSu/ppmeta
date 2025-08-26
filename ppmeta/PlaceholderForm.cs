@@ -14,6 +14,7 @@ namespace ppmeta
         private ListBox listBoxPlaceholders;
         private List<string> formatNames;
         private Button RefreshButton;
+        private Button PinButton;
         private Dictionary<string, string> text2Placeholder;
 
         public PlaceholderForm(PowerPoint.Presentation ppt)
@@ -27,12 +28,22 @@ namespace ppmeta
                 comboBoxFormat.SelectedIndex = 0;
             comboBoxFormat.SelectedIndexChanged += ComboBoxFormat_SelectedIndexChanged;
             RefreshButton.Click += (s, e) => RefreshListBox();
+            PinButton.Click += (s, e) =>
+            {
+                this.TopMost = !this.TopMost;
+                PinButton.Text = this.TopMost ? "UnPin" : "Pin";
+                PinButton.BackColor = this.TopMost ? System.Drawing.Color.LightBlue : System.Drawing.Color.Transparent;
+            };
             RefreshListBox();
-            listBoxPlaceholders.MouseDoubleClick += ListBoxPlaceholders_MouseDoubleClick;
+            listBoxPlaceholders.Click += ListBoxPlaceholders_RightClick;
         }
 
-        private void ListBoxPlaceholders_MouseDoubleClick(object sender, MouseEventArgs e)
+        private void ListBoxPlaceholders_RightClick(object sender, EventArgs e)
         {
+            if (e is MouseEventArgs me && me.Button != MouseButtons.Right)
+            {
+                return;
+            }
             if (listBoxPlaceholders.SelectedItem != null)
             {
                 var placeholderName = text2Placeholder[listBoxPlaceholders.SelectedItem.ToString()];
@@ -44,7 +55,10 @@ namespace ppmeta
                 }
             }
         }
-
+        /// <summary>
+        /// get all custom layout names in the presentation
+        /// </summary>
+        /// <returns>List of layout names</returns>
         private List<string> GetAllCustomLayoutNames()
         {
             var names = new List<string>();
@@ -70,7 +84,9 @@ namespace ppmeta
         {
             RefreshListBox();
         }
-
+        /// <summary>
+        /// generate the list of placeholders in the selected custom layout
+        /// </summary>
         private void RefreshListBox()
         {
             text2Placeholder.Clear();
@@ -102,9 +118,8 @@ namespace ppmeta
                     {
                         content = shape.TextFrame.TextRange.Text;
                     }
-                    // 键名如 msoPlaceholderBody_1
                     string placeholderKey = shapes.Count > 1 ? $"{typeKey}_{idx + 1}" : typeKey;
-                    // 展示内容如：msoPlaceholderBody_1 | 名称: 标题 1 | 内容: xxx
+                    // show：msoPlaceholderBody_1 | 名称: 标题 1 | 内容: xxx
                     var displayText = $"{placeholderKey} | 名称: {shape.Name} | 内容: {content}";
                     listBoxPlaceholders.Items.Add(displayText);
                     text2Placeholder[displayText] = placeholderKey;
@@ -118,6 +133,7 @@ namespace ppmeta
             this.comboBoxFormat = new System.Windows.Forms.ComboBox();
             this.listBoxPlaceholders = new System.Windows.Forms.ListBox();
             this.RefreshButton = new System.Windows.Forms.Button();
+            this.PinButton = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // comboBoxFormat
@@ -146,9 +162,19 @@ namespace ppmeta
             this.RefreshButton.Text = "Refresh";
             this.RefreshButton.UseVisualStyleBackColor = true;
             // 
+            // PinButton
+            // 
+            this.PinButton.Location = new System.Drawing.Point(461, 11);
+            this.PinButton.Name = "PinButton";
+            this.PinButton.Size = new System.Drawing.Size(82, 23);
+            this.PinButton.TabIndex = 3;
+            this.PinButton.Text = "📌 置顶";
+            this.PinButton.UseVisualStyleBackColor = true;
+            // 
             // PlaceholderForm
             // 
             this.ClientSize = new System.Drawing.Size(637, 461);
+            this.Controls.Add(this.PinButton);
             this.Controls.Add(this.RefreshButton);
             this.Controls.Add(this.listBoxPlaceholders);
             this.Controls.Add(this.comboBoxFormat);

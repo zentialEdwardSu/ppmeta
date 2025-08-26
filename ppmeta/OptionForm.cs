@@ -16,7 +16,7 @@ namespace ppmeta
         {
             config = currentConfig;
 
-            this.Text = "配置";
+            this.Text = "Settings";
             this.Width = 500;
             this.Height = 500;
 
@@ -24,7 +24,6 @@ namespace ppmeta
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
 
-            // 各项控件  
             panel.Controls.Add(new Label { Text = "位置X(总是居中启用时为相对左的偏移):" , Dock = DockStyle.Fill }, 0, 0);
             var txtX = new NumericUpDown { Minimum = 0, Maximum = 10000 };
             txtX.Value = Math.Min(Math.Max(config.PositionX, txtX.Minimum), txtX.Maximum);
@@ -45,13 +44,13 @@ namespace ppmeta
             panel.Controls.Add(chkAlwaysConfirm, 1, 3);
 
             panel.Controls.Add(new Label { Text = "文本方向:" }, 0, 4);
-            // 使用 KeyValuePair 进行显示和取值绑定
+
             var cmbOrientation = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
             cmbOrientation.DisplayMember = "Value";
             cmbOrientation.ValueMember = "Key";
             cmbOrientation.Items.Add(new KeyValuePair<Office.MsoTextOrientation, string>(Office.MsoTextOrientation.msoTextOrientationHorizontal, "水平"));
             cmbOrientation.Items.Add(new KeyValuePair<Office.MsoTextOrientation, string>(Office.MsoTextOrientation.msoTextOrientationVertical, "垂直"));
-            // 设置选中项
+
             foreach (KeyValuePair<Office.MsoTextOrientation, string> item in cmbOrientation.Items)
             {
                 if (item.Key == config.TextOrientation)
@@ -87,16 +86,17 @@ namespace ppmeta
             panel.Controls.Add(cmbFontFamily, 1, 8);
 
 
-            // 按钮区  
             var btnSave = new Button { Text = "保存", Width = 80 };
             var btnDefault = new Button { Text = "恢复默认", Width = 80 };
             var btnImport = new Button { Text = "导入配置", Width = 80 };
             var btnExport = new Button { Text = "导出配置", Width = 80 };
+            var btnPin = new Button { Text = "📌 置顶", Width = 80 };
             var btnPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
             btnPanel.Controls.Add(btnSave);
             btnPanel.Controls.Add(btnDefault);
             btnPanel.Controls.Add(btnImport);
             btnPanel.Controls.Add(btnExport);
+            btnPanel.Controls.Add(btnPin);
             panel.Controls.Add(btnPanel, 1, 9);
 
             btnSave.Click += (s, e) =>
@@ -118,7 +118,7 @@ namespace ppmeta
                 this.Close();
             };
 
-
+            // Default button click event: reset to default config
             btnDefault.Click += (s, e) =>
             {
                 txtX.Value = defaultConfig.PositionX;
@@ -131,7 +131,7 @@ namespace ppmeta
                 cmbFontFamily.SelectedItem = defaultConfig.FontFamily;
 
             };
-
+            // Import button click event: import config from a JSON file
             btnImport.Click += (s, e) =>
             {
                 using (var ofd = new OpenFileDialog { Filter = "JSON文件|*.json" })
@@ -171,7 +171,7 @@ namespace ppmeta
                     }
                 }
             };
-
+            // Export button click event: export current config to a JSON file
             btnExport.Click += (s, e) =>
             {
                 using (var sfd = new SaveFileDialog { Filter = "JSON文件|*.json", FileName = "config.json" })
@@ -180,7 +180,6 @@ namespace ppmeta
                     {
                         try
                         {
-                            // 先同步控件到 config
                             config.PositionX = (int)txtX.Value;
                             config.PositionY = (int)txtY.Value;
                             config.FontSize = (int)txtFontSize.Value;
@@ -202,6 +201,14 @@ namespace ppmeta
                         }
                     }
                 }
+            };
+
+            // Pin button click event: toggle TopMost
+            btnPin.Click += (s, e) =>
+            {
+                this.TopMost = !this.TopMost;
+                btnPin.Text = this.TopMost ? "📌 取消置顶" : "📌 置顶";
+                btnPin.BackColor = this.TopMost ? System.Drawing.Color.LightBlue : System.Drawing.Color.Transparent;
             };
 
 

@@ -11,7 +11,7 @@ namespace ppmeta
             var app = Globals.ThisAddIn.Application;
             PowerPoint.Presentation presentation = app.ActivePresentation;
 
-            // 根据format查找匹配的CustomLayout
+            // find Customlayout
             PowerPoint.CustomLayout matchedLayout = null;
             foreach (PowerPoint.CustomLayout layout in presentation.SlideMaster.CustomLayouts)
             {
@@ -48,8 +48,7 @@ namespace ppmeta
 
             textBox.TextFrame.TextRange.Text = item.Content;
 
-            // 设置字体大小
-            // 设置主文本框字体
+            // set font size and font-family
             if (!string.IsNullOrEmpty(config.FontFamily))
             {
                 textBox.TextFrame.TextRange.Font.Name = config.FontFamily;
@@ -58,7 +57,6 @@ namespace ppmeta
 
             if (item.Placeholders != null && item.Placeholders.Count > 0)
             {
-                // 按类型分组 slide.Shapes
                 var typeGroups = new Dictionary<string, List<PowerPoint.Shape>>();
                 foreach (PowerPoint.Shape shape in slide.Shapes)
                 {
@@ -71,14 +69,12 @@ namespace ppmeta
                     }
                 }
 
-                // 遍历每种类型的占位符
                 foreach (var kv in typeGroups)
                 {
                     string typeKey = kv.Key;
                     var shapes = kv.Value;
                     for (int idx = 0; idx < shapes.Count; idx++)
                     {
-                        // 支持 msoPlaceholderBody_1, msoPlaceholderBody_2 ... 或 msoPlaceholderBody
                         string dictKey = shapes.Count > 1 ? $"{typeKey}_{idx + 1}" : typeKey;
                         if (item.Placeholders.ContainsKey(dictKey))
                         {
