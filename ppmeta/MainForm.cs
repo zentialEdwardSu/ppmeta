@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Forms;
 using PowerPoint = Microsoft.Office.Interop.PowerPoint;
 using Office = Microsoft.Office.Core;
@@ -21,6 +23,7 @@ namespace ppmeta
         private System.Windows.Forms.TreeView CLayoutPlaceholders;
         private System.Windows.Forms.Button ClearButton;
         private System.Windows.Forms.TextBox SrcTextBox;
+        private CheckBox KeepTrackSlides;
         private System.Windows.Forms.Button PinButton;
 
         public TextEditorForm()
@@ -46,7 +49,23 @@ namespace ppmeta
                 this.Close();
             };
 
-            // import src
+            PinButton.Click += (s, e) =>
+            {
+                this.TopMost = !this.TopMost;
+                PinButton.Text = this.TopMost ? "UnPin" : "Pin";
+                PinButton.BackColor = this.TopMost ? System.Drawing.Color.LightBlue : System.Drawing.Color.Transparent;
+            };
+
+            // KeepTrackSlides checkbox event
+            KeepTrackSlides.CheckedChanged += (s, e) =>
+            {
+                if (!KeepTrackSlides.Checked)
+                {
+                    ShareState.ClearTracking();
+                }
+                ShareState.IsTracking = KeepTrackSlides.Checked;
+            };
+
             ImportButton.Click += (s, e) =>
             {
                 using (var ofd = new OpenFileDialog { Filter = "PP文本文件|*.pp.txt" })
@@ -55,6 +74,8 @@ namespace ppmeta
                     {
                         try
                         {
+                            ShareState.ClearTracking();
+                            KeepTrackSlides.Checked = false;
                             SrcTextBox.Text = System.IO.File.ReadAllText(ofd.FileName);
                             MessageBox.Show("导入成功！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -66,7 +87,15 @@ namespace ppmeta
                 }
             };
 
-            // save source file to loacal storage
+            ClearButton.Click += (s, e) =>
+            {
+                if (e is MouseEventArgs me && me.Button != MouseButtons.Middle) return;
+                ShareState.ClearTracking();
+                KeepTrackSlides.Checked = false;
+                SrcTextBox.Clear();
+            };
+
+            // save source file to local storage
             ExportButton.Click += (s, e) =>
             {
                 using (var sfd = new SaveFileDialog { Filter = "PP文本文件|*.pp.txt", FileName = "editor.pp.txt" })
@@ -85,25 +114,27 @@ namespace ppmeta
                     }
                 }
             };
-            
-            ClearButton.Click += (s, e) =>
-            {
-                if (e is MouseEventArgs me && me.Button != MouseButtons.Middle) return;
-                SrcTextBox.Clear();
-            };
-
-            PinButton.Click += (s, e) =>
-            {
-                this.TopMost = !this.TopMost;
-                PinButton.Text = this.TopMost ? "UnPin" : "Pin";
-                PinButton.BackColor = this.TopMost ? System.Drawing.Color.LightBlue : System.Drawing.Color.Transparent;
-            };
 
             RefreshButton.Click += (s, e) => LoadCustomLayouts();
 
             CLayoutPlaceholders.NodeMouseClick += UpdateClipboard;
             // re-render on change
             SrcTextBox.TextChanged += (s, e) => UpdateResult();
+
+            // enable drag-and-drop
+            SrcTextBox.AllowDrop = true;
+            SrcTextBox.DragEnter += SrcTextBox_DragEnter;
+            SrcTextBox.DragDrop += SrcTextBox_DragDrop;
+            
+            KeepTrackSlides.Checked = ShareState.IsTracking;
+            
+            var toolTip = new ToolTip();
+            toolTip.SetToolTip(KeepTrackSlides, 
+                "启用后，编辑器将追踪当前源代码生成的幻灯片。\n" +
+                "再次点击'Just Create IT!'时会更新现有幻灯片而不是创建新的。\n" +
+                "导入文件或清除内容时追踪会自动失效。\n" +
+                "请在点击'Just Create IT!'之前勾选以便追踪当前的内容");
+            
             UpdateResult();
             LoadCustomLayouts();
         }
@@ -283,14 +314,199 @@ namespace ppmeta
                 return;
             }
 
-            foreach (PPItem item in result.Items) {
-                ppmeta.SlideActor.CreateSlideWithItem(ShareState.Config, item);
+            if (KeepTrackSlides.Checked && ShareState.IsTracking && 
+                ShareState.TrackedSlideIds.Count > 0)
+            {
+                try
+                {
+                    int minCount = Math.Min(result.Items.Count, ShareState.TrackedSlideIds.Count);
+
+                    // update existing slides
+                    for (int i = 0; i < minCount; i++)
+                    {
+                        ppmeta.SlideActor.UpdateSlideWithItem(ShareState.Config, result.Items[i], ShareState.TrackedSlideIds[i]);
+                    }
+                    
+                    // add new slides
+                    for (int i = minCount; i < result.Items.Count; i++)
+                    {
+                        int slideId = ppmeta.SlideActor.CreateSlideWithItem(ShareState.Config, result.Items[i]);
+                        ShareState.TrackedSlideIds.Add(slideId);
+                    }
+
+                    // remove redundant slides
+                    for (int i = result.Items.Count; i < ShareState.TrackedSlideIds.Count; i++)
+                    {
+                        try
+                        {
+                            foreach (PowerPoint.Slide slide in ppt.Slides)
+                            {
+                                if (slide.SlideID == ShareState.TrackedSlideIds[i])
+                                {
+                                    slide.Delete();
+                                    break;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"删除幻灯片失败: {ex.Message}");
+                        }
+                    }
+
+                    // update tracking information
+                    ShareState.TrackedSlideIds = ShareState.TrackedSlideIds.Take(result.Items.Count).ToList();
+                    ShareState.TrackedSourceCode = text;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"更新幻灯片时出错: {ex.Message}\n将创建新幻灯片", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    ShareState.ClearTracking();
+                    KeepTrackSlides.Checked = false;
+                    CreateNewSlides(result.Items);
+                    return;
+                }
+            }
+            else
+            {
+                CreateNewSlides(result.Items);
+
+                // update tracking state if keep tracking is enabled
+                if (KeepTrackSlides.Checked)
+                {
+                    ShareState.TrackedSourceCode = text;
+                    ShareState.IsTracking = true;
+                }
             }
             
             if (ShareState.Config.AlwaysConfirm)
             {
-                MessageBox.Show($"成功创建 {result.Items.Count} 个幻灯片", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                string action = (KeepTrackSlides.Checked && ShareState.TrackedSlideIds.Count > 0) ? "更新" : "创建";
+                MessageBox.Show($"成功{action} {result.Items.Count} 个幻灯片", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
+        }
+        
+        private void CreateNewSlides(List<PPItem> items)
+        {
+            ShareState.ClearTracking();
+            
+            foreach (PPItem item in items) 
+            {
+                int slideId = ppmeta.SlideActor.CreateSlideWithItem(ShareState.Config, item);
+                if (KeepTrackSlides.Checked)
+                {
+                    ShareState.TrackedSlideIds.Add(slideId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// process drag enter event
+        /// </summary>
+        private void SrcTextBox_DragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                // check for .pp.txt files
+                bool hasPpTxtFile = false;
+                foreach (string file in files)
+                {
+                    if (file.EndsWith(".pp.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasPpTxtFile = true;
+                        break;
+                    }
+                }
+                
+                if (hasPpTxtFile)
+                {
+                    e.Effect = DragDropEffects.Copy;
+                }
+                else
+                {
+                    e.Effect = DragDropEffects.None;
+                }
+            }
+            else
+            {
+                e.Effect = DragDropEffects.None;
+            }
+        }
+
+        /// <summary>
+        /// process drag drop event
+        /// </summary>
+        private void SrcTextBox_DragDrop(object sender, DragEventArgs e)
+        {
+            string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            
+            string ppTxtFile = null;
+            foreach (string file in files)
+            {
+                if (file.EndsWith(".pp.txt", StringComparison.OrdinalIgnoreCase))
+                {
+                    ppTxtFile = file;
+                    break;
+                }
+            }
+            
+            if (ppTxtFile == null) return;
+            
+            try
+            {
+                string draggedContent = System.IO.File.ReadAllText(ppTxtFile);
+                
+                if (!string.IsNullOrWhiteSpace(SrcTextBox.Text))
+                {
+                    var result = ShowDragDropDialog();
+                    switch (result)
+                    {
+                        case DialogResult.Cancel:
+                            return; // cancel
+                        case DialogResult.Yes:
+                            // overwrite
+                            ShareState.ClearTracking();
+                            KeepTrackSlides.Checked = false;
+                            SrcTextBox.Text = draggedContent;
+                            break;
+                        case DialogResult.No:
+                            // insert
+                            int cursorPosition = SrcTextBox.SelectionStart;
+                            SrcTextBox.Text = SrcTextBox.Text.Insert(cursorPosition, "\n" + draggedContent);
+                            SrcTextBox.SelectionStart = cursorPosition + draggedContent.Length + 1;
+                            break;
+                    }
+                }
+                else
+                {
+                    SrcTextBox.Text = draggedContent;
+                }
+                
+                if (ShareState.Config.AlwaysConfirm)
+                {
+                    MessageBox.Show("文件拖入成功！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"读取文件失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// display dialog
+        /// </summary>
+        private DialogResult ShowDragDropDialog()
+        {
+            return MessageBox.Show(
+                "当前编辑器已有内容，您希望如何处理拖入的文件？\n\n" +
+                "是(Y) - 覆盖当前内容\n" +
+                "否(N) - 在光标位置后插入\n" +
+                "取消 - 取消拖入操作",
+                "拖入文件处理方式",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
         }
 
         private void InitializeComponent()
@@ -310,6 +526,7 @@ namespace ppmeta
             this.tableLayoutPanel2 = new System.Windows.Forms.TableLayoutPanel();
             this.RefreshButton = new System.Windows.Forms.Button();
             this.CLayoutPlaceholders = new System.Windows.Forms.TreeView();
+            this.KeepTrackSlides = new System.Windows.Forms.CheckBox();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
             this.splitContainer1.Panel1.SuspendLayout();
             this.splitContainer1.Panel2.SuspendLayout();
@@ -372,7 +589,7 @@ namespace ppmeta
             this.flowLayoutPanel1.Controls.Add(this.ImportButton);
             this.flowLayoutPanel1.Controls.Add(this.ExportButton);
             this.flowLayoutPanel1.Controls.Add(this.ClearButton);
-            this.flowLayoutPanel1.Controls.Add(this.PinButton);
+            this.flowLayoutPanel1.Controls.Add(this.KeepTrackSlides);
             this.flowLayoutPanel1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.flowLayoutPanel1.Location = new System.Drawing.Point(3, 670);
             this.flowLayoutPanel1.Name = "flowLayoutPanel1";
@@ -412,7 +629,7 @@ namespace ppmeta
             // PinButton
             // 
             this.PinButton.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.PinButton.Location = new System.Drawing.Point(276, 3);
+            this.PinButton.Location = new System.Drawing.Point(115, 3);
             this.PinButton.Name = "PinButton";
             this.PinButton.Size = new System.Drawing.Size(85, 46);
             this.PinButton.TabIndex = 3;
@@ -423,6 +640,7 @@ namespace ppmeta
             // 
             this.flowLayoutPanel2.Controls.Add(this.ComfirmButton);
             this.flowLayoutPanel2.Controls.Add(this.CancelButton);
+            this.flowLayoutPanel2.Controls.Add(this.PinButton);
             this.flowLayoutPanel2.Dock = System.Windows.Forms.DockStyle.Fill;
             this.flowLayoutPanel2.FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft;
             this.flowLayoutPanel2.Location = new System.Drawing.Point(463, 670);
@@ -497,6 +715,16 @@ namespace ppmeta
             this.CLayoutPlaceholders.Size = new System.Drawing.Size(280, 663);
             this.CLayoutPlaceholders.TabIndex = 6;
             // 
+            // KeepTrackSlides
+            // 
+            this.KeepTrackSlides.AutoSize = true;
+            this.KeepTrackSlides.Location = new System.Drawing.Point(276, 3);
+            this.KeepTrackSlides.Name = "KeepTrackSlides";
+            this.KeepTrackSlides.Size = new System.Drawing.Size(109, 19);
+            this.KeepTrackSlides.TabIndex = 3;
+            this.KeepTrackSlides.Text = "Keep Track";
+            this.KeepTrackSlides.UseVisualStyleBackColor = true;
+            // 
             // TextEditorForm
             // 
             this.ClientSize = new System.Drawing.Size(1211, 721);
@@ -511,6 +739,7 @@ namespace ppmeta
             this.tableLayoutPanel1.ResumeLayout(false);
             this.tableLayoutPanel1.PerformLayout();
             this.flowLayoutPanel1.ResumeLayout(false);
+            this.flowLayoutPanel1.PerformLayout();
             this.flowLayoutPanel2.ResumeLayout(false);
             this.tableLayoutPanel2.ResumeLayout(false);
             this.ResumeLayout(false);

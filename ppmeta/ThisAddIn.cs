@@ -12,6 +12,16 @@ namespace ppmeta
     {
         public static Config Config { get; set; }
         public static string Code { get; set; }
+        public static List<int> TrackedSlideIds { get; set; } = new List<int>();
+        public static string TrackedSourceCode { get; set; } = string.Empty;
+        public static bool IsTracking { get; set; } = false;
+        
+        public static void ClearTracking()
+        {
+            TrackedSlideIds.Clear();
+            TrackedSourceCode = string.Empty;
+            IsTracking = false;
+        }
     }
     public partial class ThisAddIn
     {

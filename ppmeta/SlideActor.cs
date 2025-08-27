@@ -1,12 +1,13 @@
 ﻿using PowerPoint = Microsoft.Office.Interop.PowerPoint;
 using Office = Microsoft.Office.Core;
 using System.Collections.Generic;
+using System;
 
 namespace ppmeta
 {
     internal static class SlideActor
     {
-        public static void CreateSlideWithItem(Config config, PPItem item)
+        public static int CreateSlideWithItem(Config config, PPItem item)
         {
             var app = Globals.ThisAddIn.Application;
             PowerPoint.Presentation presentation = app.ActivePresentation;
@@ -27,7 +28,47 @@ namespace ppmeta
             }
 
             PowerPoint.Slide slide = presentation.Slides.AddSlide(presentation.Slides.Count + 1, matchedLayout);
+            
+            FillSlideContent(config, item, slide);
+            
+            return slide.SlideID;
+        }
 
+        public static void UpdateSlideWithItem(Config config, PPItem item, int slideId)
+        {
+            var app = Globals.ThisAddIn.Application;
+            PowerPoint.Presentation presentation = app.ActivePresentation;
+
+            PowerPoint.Slide slide = null;
+            foreach (PowerPoint.Slide s in presentation.Slides)
+            {
+                if (s.SlideID == slideId)
+                {
+                    slide = s;
+                    break;
+                }
+            }
+            
+            if (slide == null)
+            {
+                throw new Exception($"无法找到 SlideID {slideId} 对应的幻灯片");
+            }
+
+            // 清除现有的自定义文本框（非占位符）
+            for (int i = slide.Shapes.Count; i >= 1; i--)
+            {
+                var shape = slide.Shapes[i];
+                if (shape.Type == Office.MsoShapeType.msoTextBox)
+                {
+                    shape.Delete();
+                }
+            }
+
+            FillSlideContent(config, item, slide);
+        }
+
+        private static void FillSlideContent(Config config, PPItem item, PowerPoint.Slide slide)
+        {
             // only create textbox when content is not empty
             if (string.IsNullOrEmpty(item.Content) == false)
             {
