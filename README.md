@@ -4,7 +4,7 @@
 
 ppMeta = (PowerPoint->ppt->pp) + (Meta Data to Create Slide -> Meta)
 
-注意：未测试在类Unix系统下的可用性。
+注意：VSTO插件依赖于COM，仅能在Windows中使用 **Only In Windows**
 
 ![alt text](imgs/main.png)
 
