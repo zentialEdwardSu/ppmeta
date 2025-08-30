@@ -140,43 +140,7 @@ jobs:
           $content = $content -replace '<ManifestCertificateThumbprint>.*</ManifestCertificateThumbprint>', "<ManifestCertificateThumbprint>$($cert.Thumbprint)</ManifestCertificateThumbprint>"
           Set-Content $projFile $content
 
-      - name: Build main project
-        run: msbuild ppmeta\ppmeta.csproj /p:Configuration=${{ inputs.configuration }} /p:Platform="Any CPU"
-
-      - name: Prepare installer dependencies
-        shell: pwsh
-        run: |
-          # ppSetup项目引用的是obj\Release路径，需要确保VSTO文件在那里
-          $configuration = "${{ inputs.configuration }}"
-          $sourceDir = "ppmeta\bin\$configuration"
-          $targetDir = "ppmeta\obj\$configuration"
-          
-          Write-Host "Copying VSTO deployment files to obj\$configuration for installer..."
-          
-          # 复制VSTO部署必需文件到obj目录
-          if (Test-Path "$sourceDir\ppmeta.dll.manifest") {
-            Copy-Item "$sourceDir\ppmeta.dll.manifest" $targetDir -Force
-            Write-Host "✅ Copied ppmeta.dll.manifest"
-          }
-          
-          if (Test-Path "$sourceDir\ppmeta.vsto") {
-            Copy-Item "$sourceDir\ppmeta.vsto" $targetDir -Force
-            Write-Host "✅ Copied ppmeta.vsto"
-          }
-          
-          # 验证关键文件存在
-          $requiredFiles = @("ppmeta.dll", "ppmeta.dll.manifest", "ppmeta.vsto")
-          foreach ($file in $requiredFiles) {
-            if (Test-Path "$targetDir\$file") {
-              Write-Host "✅ Verified: $file exists in obj\$configuration"
-            } else {
-              Write-Host "❌ Missing: $file not found in obj\$configuration"
-            }
-          }
-          
-          Write-Host "VSTO files prepared for installer build"
-
-      - name: Build installer project
+      - name: Build installer project with dependencies
         id: build
         shell: pwsh
         run: |
@@ -184,49 +148,38 @@ jobs:
           
           if (Test-Path "ppSetup\ppSetup.vdproj") {
             Write-Host "Building Visual Studio installer project with devenv..."
+            Write-Host "Configuration: $configuration"
+            Write-Host "Note: devenv will automatically build ppmeta project dependencies if needed"
             
             try {
-              devenv ppSetup\ppSetup.vdproj /build $configuration
+              # 使用/build命令构建整个解决方案，指定安装程序项目
+              devenv ppmeta.sln /build $configuration /project ppSetup
               
               $msiPath = "ppSetup\$configuration\ppSetup.msi"
               if (Test-Path $msiPath) {
-                Write-Host "Successfully built installer: $msiPath"
+                Write-Host "✅ Successfully built installer: $msiPath"
+                $msiSize = (Get-Item $msiPath).Length
+                Write-Host "   File size: $([math]::Round($msiSize/1MB, 2)) MB"
                 echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
               } else {
-                Write-Host "Error: Installer was not created at expected path: $msiPath"
-                throw "Installer build failed"
+                Write-Host "❌ Installer was not created at expected path: $msiPath"
+                Write-Host "Checking alternative locations..."
+                Get-ChildItem -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found MSI: $($_.FullName)" }
+                throw "Installer build failed - MSI not found"
               }
             }
             catch {
-              Write-Host "Failed to build installer with devenv: $($_.Exception.Message)"
-              
-              $msiPath = "ppSetup\$configuration\ppSetup.msi"
-              if (Test-Path $msiPath) {
-                Write-Host "Found pre-built installer: $msiPath"
-                echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
-              } else {
-                Write-Host "Creating portable ZIP package as fallback..."
-                
-                $version = "1.0.0"
-                $zipPath = "ppSetup\$configuration\ppmeta-portable-$version.zip"
-                
-                New-Item -ItemType Directory -Path "ppSetup\$configuration" -Force
-                Compress-Archive -Path "ppmeta\bin\$configuration\*" -DestinationPath $zipPath -Force
-                
-                Write-Host "Created portable ZIP package: $zipPath"
-                echo "installer-path=$zipPath" >> $env:GITHUB_OUTPUT
+              Write-Host "Failed to build installer: $($_.Exception.Message)"
+              Write-Host "Checking for partial build outputs..."
+              if (Test-Path "ppSetup\$configuration") {
+                Write-Host "Contents of ppSetup\$configuration:"
+                Get-ChildItem "ppSetup\$configuration" | ForEach-Object { Write-Host "   $($_.Name)" }
               }
+              throw
             }
           } else {
-            Write-Host "No installer project found. Creating portable package..."
-            
-            $version = "1.0.0"
-            $zipPath = "ppmeta-portable-$version.zip"
-            
-            Compress-Archive -Path "ppmeta\bin\$configuration\*" -DestinationPath $zipPath -Force
-            
-            Write-Host "Created portable package: $zipPath"
-            echo "installer-path=$zipPath" >> $env:GITHUB_OUTPUT
+            Write-Host "❌ No installer project found at ppSetup\ppSetup.vdproj"
+            throw "Installer project not found"
           }
 
       - name: Upload installer artifact

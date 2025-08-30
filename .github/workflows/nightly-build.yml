@@ -141,59 +141,42 @@ jobs:
           $content = $content -replace '<ManifestCertificateThumbprint>.*</ManifestCertificateThumbprint>', "<ManifestCertificateThumbprint>$($cert.Thumbprint)</ManifestCertificateThumbprint>"
           Set-Content $projFile $content
 
-      - name: Build solution (Release)
-        run: msbuild ppmeta.sln /p:Configuration=Release /p:Platform="Any CPU"
-
-      - name: Prepare installer dependencies
-        shell: pwsh
-        run: |
-          # ppSetup项目引用的是obj\Release路径，需要确保VSTO文件在那里
-          $sourceDir = "ppmeta\bin\Release"
-          $targetDir = "ppmeta\obj\Release"
-          
-          Write-Host "Copying VSTO deployment files to obj\Release for installer..."
-          
-          # 复制VSTO部署必需文件到obj\Release
-          if (Test-Path "$sourceDir\ppmeta.dll.manifest") {
-            Copy-Item "$sourceDir\ppmeta.dll.manifest" $targetDir -Force
-            Write-Host "✅ Copied ppmeta.dll.manifest"
-          }
-          
-          if (Test-Path "$sourceDir\ppmeta.vsto") {
-            Copy-Item "$sourceDir\ppmeta.vsto" $targetDir -Force
-            Write-Host "✅ Copied ppmeta.vsto"
-          }
-          
-          # 验证关键文件存在
-          $requiredFiles = @("ppmeta.dll", "ppmeta.dll.manifest", "ppmeta.vsto")
-          foreach ($file in $requiredFiles) {
-            if (Test-Path "$targetDir\$file") {
-              Write-Host "✅ Verified: $file exists in obj\Release"
-            } else {
-              Write-Host "❌ Missing: $file not found in obj\Release"
-            }
-          }
-          
-          Write-Host "VSTO files prepared for installer build"
-
       - name: Setup Visual Studio devenv
         uses: seanmiddleditch/gha-setup-vsdevenv@v4
 
-      - name: Build installer
+      - name: Build installer with dependencies
         shell: pwsh
         run: |
           if (Test-Path "ppSetup\ppSetup.vdproj") {
             Write-Host "Building Visual Studio installer project with devenv..."
+            Write-Host "Note: devenv will automatically build ppmeta project dependencies if needed"
             
             try {
-              devenv ppSetup\ppSetup.vdproj /build Release
-              Write-Host "Installer built successfully"
+              # 使用/build命令，这会自动处理项目依赖关系
+              devenv ppmeta.sln /build Release /project ppSetup
+              Write-Host "Installer built successfully with dependencies"
+              
+              # 验证输出文件
+              if (Test-Path "ppSetup\Release\ppSetup.msi") {
+                Write-Host "✅ MSI installer created: ppSetup\Release\ppSetup.msi"
+                $msiSize = (Get-Item "ppSetup\Release\ppSetup.msi").Length
+                Write-Host "   File size: $([math]::Round($msiSize/1MB, 2)) MB"
+              } else {
+                Write-Host "❌ MSI installer not found at expected location"
+                Write-Host "Checking alternative locations..."
+                Get-ChildItem -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found MSI: $($_.FullName)" }
+              }
             }
             catch {
               Write-Host "Failed to build installer: $($_.Exception.Message)"
+              Write-Host "Checking for partial build outputs..."
+              if (Test-Path "ppSetup\Release") {
+                Get-ChildItem "ppSetup\Release" | ForEach-Object { Write-Host "   $($_.Name)" }
+              }
+              throw
             }
           } else {
-            Write-Host "No installer project found"
+            Write-Host "No installer project found at ppSetup\ppSetup.vdproj"
           }
 
       - name: Get commit info
