@@ -143,6 +143,39 @@ jobs:
       - name: Build main project
         run: msbuild ppmeta\ppmeta.csproj /p:Configuration=${{ inputs.configuration }} /p:Platform="Any CPU"
 
+      - name: Prepare installer dependencies
+        shell: pwsh
+        run: |
+          # ppSetup项目引用的是obj\Release路径，需要确保VSTO文件在那里
+          $configuration = "${{ inputs.configuration }}"
+          $sourceDir = "ppmeta\bin\$configuration"
+          $targetDir = "ppmeta\obj\$configuration"
+          
+          Write-Host "Copying VSTO deployment files to obj\$configuration for installer..."
+          
+          # 复制VSTO部署必需文件到obj目录
+          if (Test-Path "$sourceDir\ppmeta.dll.manifest") {
+            Copy-Item "$sourceDir\ppmeta.dll.manifest" $targetDir -Force
+            Write-Host "✅ Copied ppmeta.dll.manifest"
+          }
+          
+          if (Test-Path "$sourceDir\ppmeta.vsto") {
+            Copy-Item "$sourceDir\ppmeta.vsto" $targetDir -Force
+            Write-Host "✅ Copied ppmeta.vsto"
+          }
+          
+          # 验证关键文件存在
+          $requiredFiles = @("ppmeta.dll", "ppmeta.dll.manifest", "ppmeta.vsto")
+          foreach ($file in $requiredFiles) {
+            if (Test-Path "$targetDir\$file") {
+              Write-Host "✅ Verified: $file exists in obj\$configuration"
+            } else {
+              Write-Host "❌ Missing: $file not found in obj\$configuration"
+            }
+          }
+          
+          Write-Host "VSTO files prepared for installer build"
+
       - name: Build installer project
         id: build
         shell: pwsh

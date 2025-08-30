@@ -149,6 +149,38 @@ jobs:
       - name: Build solution (Release)
         run: msbuild ppmeta.sln /p:Configuration=Release /p:Platform="Any CPU"
 
+      - name: Prepare installer dependencies
+        shell: pwsh
+        run: |
+          # ppSetup项目引用的是obj\Release路径，需要确保VSTO文件在那里
+          $sourceDir = "ppmeta\bin\Release"
+          $targetDir = "ppmeta\obj\Release"
+          
+          Write-Host "Copying VSTO deployment files to obj\Release for installer..."
+          
+          # 复制VSTO部署必需文件到obj\Release
+          if (Test-Path "$sourceDir\ppmeta.dll.manifest") {
+            Copy-Item "$sourceDir\ppmeta.dll.manifest" $targetDir -Force
+            Write-Host "✅ Copied ppmeta.dll.manifest"
+          }
+          
+          if (Test-Path "$sourceDir\ppmeta.vsto") {
+            Copy-Item "$sourceDir\ppmeta.vsto" $targetDir -Force
+            Write-Host "✅ Copied ppmeta.vsto"
+          }
+          
+          # 验证关键文件存在
+          $requiredFiles = @("ppmeta.dll", "ppmeta.dll.manifest", "ppmeta.vsto")
+          foreach ($file in $requiredFiles) {
+            if (Test-Path "$targetDir\$file") {
+              Write-Host "✅ Verified: $file exists in obj\Release"
+            } else {
+              Write-Host "❌ Missing: $file not found in obj\Release"
+            }
+          }
+          
+          Write-Host "VSTO files prepared for installer build"
+
       - name: Setup Visual Studio devenv
         uses: seanmiddleditch/gha-setup-vsdevenv@v4
 
