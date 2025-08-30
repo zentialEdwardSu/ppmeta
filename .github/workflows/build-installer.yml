@@ -1,0 +1,110 @@
+name: Build Installer
+
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        required: true
+        type: string
+        default: 'Release'
+    outputs:
+      installer-path:
+        description: "Path to the built installer"
+        value: ${{ jobs.build-installer.outputs.installer-path }}
+        
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+        - Release
+        - Debug
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    outputs:
+      installer-path: ${{ steps.build.outputs.installer-path }}
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup Visual Studio devenv
+        uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore ppmeta.sln
+
+      - name: Build main project
+        run: msbuild ppmeta\ppmeta.csproj /p:Configuration=${{ inputs.configuration }} /p:Platform="Any CPU"
+
+      - name: Build installer project
+        id: build
+        shell: pwsh
+        run: |
+          $configuration = "${{ inputs.configuration }}"
+          
+          if (Test-Path "ppSetup\ppSetup.vdproj") {
+            Write-Host "Building Visual Studio installer project with devenv..."
+            
+            try {
+              devenv ppSetup\ppSetup.vdproj /build $configuration
+              
+              $msiPath = "ppSetup\$configuration\ppSetup.msi"
+              if (Test-Path $msiPath) {
+                Write-Host "Successfully built installer: $msiPath"
+                echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
+              } else {
+                Write-Host "Error: Installer was not created at expected path: $msiPath"
+                throw "Installer build failed"
+              }
+            }
+            catch {
+              Write-Host "Failed to build installer with devenv: $($_.Exception.Message)"
+              
+              $msiPath = "ppSetup\$configuration\ppSetup.msi"
+              if (Test-Path $msiPath) {
+                Write-Host "Found pre-built installer: $msiPath"
+                echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
+              } else {
+                Write-Host "Creating portable ZIP package as fallback..."
+                
+                $version = "1.0.0"
+                $zipPath = "ppSetup\$configuration\ppmeta-portable-$version.zip"
+                
+                New-Item -ItemType Directory -Path "ppSetup\$configuration" -Force
+                Compress-Archive -Path "ppmeta\bin\$configuration\*" -DestinationPath $zipPath -Force
+                
+                Write-Host "Created portable ZIP package: $zipPath"
+                echo "installer-path=$zipPath" >> $env:GITHUB_OUTPUT
+              }
+            }
+          } else {
+            Write-Host "No installer project found. Creating portable package..."
+            
+            $version = "1.0.0"
+            $zipPath = "ppmeta-portable-$version.zip"
+            
+            Compress-Archive -Path "ppmeta\bin\$configuration\*" -DestinationPath $zipPath -Force
+            
+            Write-Host "Created portable package: $zipPath"
+            echo "installer-path=$zipPath" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ inputs.configuration }}
+          path: ${{ steps.build.outputs.installer-path }}
+          retention-days: 30

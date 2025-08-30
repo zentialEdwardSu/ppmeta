@@ -1,0 +1,172 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create release for'
+        required: true
+        type: string
+
+jobs:
+  release-build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          
+          $version = $tag -replace '^v', ''
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "is-prerelease=$($tag -match '-(alpha|beta|rc)')" >> $env:GITHUB_OUTPUT
+          
+          Write-Host "Tag: $tag"
+          Write-Host "Version: $version"
+
+      - name: Setup .NET Framework
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore ppmeta.sln
+
+      - name: Build solution (Release)
+        run: msbuild ppmeta.sln /p:Configuration=Release /p:Platform="Any CPU"
+
+      - name: Setup Visual Studio devenv
+        uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (Test-Path "ppSetup\ppSetup.vdproj") {
+            Write-Host "Building Visual Studio installer project with devenv..."
+            
+            try {
+              devenv ppSetup\ppSetup.vdproj /build Release
+              Write-Host "Installer built successfully"
+            }
+            catch {
+              Write-Host "Failed to build installer: $($_.Exception.Message)"
+            }
+          } else {
+            Write-Host "No installer project found"
+          }
+
+      - name: Create release artifacts
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "${{ steps.version.outputs.tag }}"
+          $artifactDir = "ppmeta-$version"
+          
+          New-Item -ItemType Directory -Path $artifactDir -Force
+          
+          Copy-Item "ppmeta\bin\Release\*" $artifactDir -Recurse -Force
+          
+          if (Test-Path "ppSetup\Release\ppSetup.msi") {
+            Copy-Item "ppSetup\Release\ppSetup.msi" "$artifactDir\ppmeta-$version.msi"
+          }
+          
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" $artifactDir
+          }
+          if (Test-Path "LICENSE") {
+            Copy-Item "LICENSE" $artifactDir
+          }
+          
+          @"
+          PPMeta Release Build
+          Version: $version
+          Tag: $tag
+          Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+          Commit: $(git rev-parse HEAD)
+          
+          Release Notes:
+          Please see the GitHub release page for detailed release notes.
+          "@ | Out-File -FilePath "$artifactDir\VERSION.txt" -Encoding UTF8
+          
+          Compress-Archive -Path "$artifactDir\*" -DestinationPath "ppmeta-$version.zip"
+
+      - name: Generate release notes
+        id: release-notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          
+          $previousTag = git describe --tags --abbrev=0 HEAD^ 2>$null
+          if ($previousTag) {
+            Write-Host "Previous tag: $previousTag"
+            $commitRange = "$previousTag..HEAD"
+          } else {
+            Write-Host "No previous tag found, using all commits"
+            $commitRange = "HEAD"
+          }
+          
+          $commits = git log $commitRange --pretty=format:"- %s (%h)" --no-merges
+          
+          $releaseNotes = @"
+          ## What's Changed
+          
+          $commits
+          
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$previousTag...${{ steps.version.outputs.tag }}
+          "@
+          
+          $releaseNotes | Out-File -FilePath "release-notes.txt" -Encoding UTF8
+          echo "notes-file=release-notes.txt" >> $env:GITHUB_OUTPUT
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppmeta-${{ steps.version.outputs.version }}
+          path: |
+            ppmeta-${{ steps.version.outputs.version }}.zip
+            ppmeta-${{ steps.version.outputs.version }}/
+          retention-days: 90
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "PPMeta ${{ steps.version.outputs.version }}"
+          body_path: ${{ steps.release-notes.outputs.notes-file }}
+          files: |
+            ppmeta-${{ steps.version.outputs.version }}.zip
+            ppmeta-${{ steps.version.outputs.version }}/ppmeta-${{ steps.version.outputs.version }}.msi
+          prerelease: ${{ steps.version.outputs.is-prerelease == 'true' }}
+          make_latest: ${{ steps.version.outputs.is-prerelease == 'false' }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Notify release
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $isPrerelease = "${{ steps.version.outputs.is-prerelease }}"
+          
+          if ($isPrerelease -eq "true") {
+            Write-Host "🚀 Pre-release $version has been created!"
+          } else {
+            Write-Host "🎉 Release $version has been created!"
+          }
+          
+          Write-Host "Release URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"

@@ -1,0 +1,150 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-commits:
+    runs-on: windows-latest
+    outputs:
+      should-build: ${{ steps.check.outputs.should-build }}
+      commit-count: ${{ steps.check.outputs.commit-count }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for commits in last 24 hours
+        id: check
+        shell: pwsh
+        run: |
+          $yesterday = (Get-Date).AddDays(-1).ToString("yyyy-MM-dd")
+          $commitCount = git rev-list --count --since="$yesterday" HEAD
+          Write-Host "Commits in last 24 hours: $commitCount"
+          
+          if ($commitCount -gt 0) {
+            echo "should-build=true" >> $env:GITHUB_OUTPUT
+            echo "commit-count=$commitCount" >> $env:GITHUB_OUTPUT
+            Write-Host "New commits found, will proceed with nightly build"
+          } else {
+            echo "should-build=false" >> $env:GITHUB_OUTPUT
+            echo "commit-count=0" >> $env:GITHUB_OUTPUT
+            Write-Host "No new commits, skipping nightly build"
+          }
+
+  nightly-build:
+    runs-on: windows-latest
+    needs: check-commits
+    if: needs.check-commits.outputs.should-build == 'true'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET Framework
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore ppmeta.sln
+
+      - name: Build solution (Release)
+        run: msbuild ppmeta.sln /p:Configuration=Release /p:Platform="Any CPU"
+
+      - name: Setup Visual Studio devenv
+        uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (Test-Path "ppSetup\ppSetup.vdproj") {
+            Write-Host "Building Visual Studio installer project with devenv..."
+            
+            try {
+              devenv ppSetup\ppSetup.vdproj /build Release
+              Write-Host "Installer built successfully"
+            }
+            catch {
+              Write-Host "Failed to build installer: $($_.Exception.Message)"
+            }
+          } else {
+            Write-Host "No installer project found"
+          }
+
+      - name: Get commit info
+        id: commit-info
+        shell: pwsh
+        run: |
+          $shortSha = git rev-parse --short HEAD
+          $commitDate = git log -1 --format=%cd --date=format:%Y%m%d
+          $buildVersion = "$commitDate-$shortSha"
+          echo "build-version=$buildVersion" >> $env:GITHUB_OUTPUT
+          echo "short-sha=$shortSha" >> $env:GITHUB_OUTPUT
+
+      - name: Create nightly release artifacts
+        shell: pwsh
+        run: |
+          $buildVersion = "${{ steps.commit-info.outputs.build-version }}"
+          $artifactDir = "nightly-$buildVersion"
+          
+          New-Item -ItemType Directory -Path $artifactDir -Force
+          
+          Copy-Item "ppmeta\bin\Release\*" $artifactDir -Recurse -Force
+          
+          if (Test-Path "ppSetup\Release\ppSetup.msi") {
+            Copy-Item "ppSetup\Release\ppSetup.msi" "$artifactDir\ppmeta-nightly-$buildVersion.msi"
+          }
+          
+          @"
+          PPMeta Nightly Build
+          Build Version: $buildVersion
+          Commit: ${{ steps.commit-info.outputs.short-sha }}
+          Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+          Commits in last 24h: ${{ needs.check-commits.outputs.commit-count }}
+          "@ | Out-File -FilePath "$artifactDir\BUILD_INFO.txt" -Encoding UTF8
+
+      - name: Upload nightly build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppmeta-nightly-${{ steps.commit-info.outputs.build-version }}
+          path: nightly-${{ steps.commit-info.outputs.build-version }}
+          retention-days: 30
+
+      - name: Get latest commit message
+        id: latest-commit
+        shell: pwsh
+        run: |
+          $commitMessage = git log -1 --oneline
+          echo "message=$commitMessage" >> $env:GITHUB_OUTPUT
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ steps.commit-info.outputs.build-version }}
+          name: "Nightly Build ${{ steps.commit-info.outputs.build-version }}"
+          body: |
+            🌙 **Nightly Build**
+            
+            This is an automated nightly build containing the latest changes.
+            
+            **Build Information:**
+            - Build Version: `${{ steps.commit-info.outputs.build-version }}`
+            - Commit: `${{ steps.commit-info.outputs.short-sha }}`
+            - Commits in last 24h: `${{ needs.check-commits.outputs.commit-count }}`
+            
+            **⚠️ Warning:** This is a development build and may be unstable.
+            
+            **Latest commit:**
+            ```
+            ${{ steps.latest-commit.outputs.message }}
+            ```
+          files: |
+            nightly-${{ steps.commit-info.outputs.build-version }}/**/*
+          prerelease: true
+          make_latest: false
+          token: ${{ secrets.GITHUB_TOKEN }}
