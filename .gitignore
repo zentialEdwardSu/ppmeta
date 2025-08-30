@@ -74,3 +74,5 @@ Desktop.ini
 
 # User-specific files
 *.pubxml.user
+
+github-secrets-config.txt

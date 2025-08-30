@@ -46,6 +46,100 @@ jobs:
       - name: Restore NuGet packages
         run: nuget restore ppmeta.sln
 
+      - name: Setup certificate for VSTO signing
+        shell: pwsh
+        env:
+          VSTO_CERTIFICATE: ${{ secrets.VSTO_CERTIFICATE }}
+          VSTO_CERT_THUMBPRINT: ${{ secrets.VSTO_CERT_THUMBPRINT }}
+          VSTO_CERT_PASSWORD: ${{ secrets.VSTO_CERT_PASSWORD }}
+        run: |
+          # 设置证书用于VSTO签名
+          if (-not $env:VSTO_CERTIFICATE) {
+            Write-Host "No certificate provided, creating temporary certificate..."
+            
+            # 创建自签名证书
+            $cert = New-SelfSignedCertificate -Subject "CN=PPMeta Build" -Type CodeSigning -KeyUsage DigitalSignature -FriendlyName "PPMeta Build Certificate" -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256
+            
+            # 导出证书到PFX文件
+            $pwd = ConvertTo-SecureString -String "TempPassword123!" -Force -AsPlainText
+            Export-PfxCertificate -Cert $cert -FilePath "ppmeta\temp_cert.pfx" -Password $pwd
+            
+            echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+            echo "CERT_PASSWORD=TempPassword123!" >> $env:GITHUB_ENV
+            echo "CERT_PATH=temp_cert.pfx" >> $env:GITHUB_ENV
+          } else {
+            Write-Host "Using provided certificate from secrets..."
+            
+            # 从secrets解码证书
+            $certBytes = [System.Convert]::FromBase64String($env:VSTO_CERTIFICATE)
+            [System.IO.File]::WriteAllBytes("ppmeta\production_cert.pfx", $certBytes)
+            
+            echo "CERT_THUMBPRINT=$env:VSTO_CERT_THUMBPRINT" >> $env:GITHUB_ENV
+            echo "CERT_PASSWORD=$env:VSTO_CERT_PASSWORD" >> $env:GITHUB_ENV
+            echo "CERT_PATH=production_cert.pfx" >> $env:GITHUB_ENV
+          }
+
+      - name: Install certificate
+        shell: pwsh
+        run: |
+          $certPath = "ppmeta\$env:CERT_PATH"
+          $password = ConvertTo-SecureString -String "$env:CERT_PASSWORD" -Force -AsPlainText
+          
+          # 安装证书到当前用户存储
+          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Write-Host "Certificate installed: $($cert.Thumbprint)"
+          
+          # 导出公钥证书供用户安装
+          $publicCertPath = "ppmeta\PPMeta-CodeSigning-Certificate.cer"
+          Export-Certificate -Cert $cert -FilePath $publicCertPath -Type CERT
+          Write-Host "Public certificate exported: $publicCertPath"
+          
+          # 创建证书安装说明
+          $isProduction = $env:VSTO_CERTIFICATE -and $env:VSTO_CERTIFICATE -ne ""
+          $certType = if ($isProduction) { "生产环境" } else { "开发测试" }
+          @"
+          PPMeta 代码签名证书安装说明
+          =====================================
+          
+          证书类型: $certType 证书
+          
+          如果您在运行PPMeta时遇到"Windows无法验证此软件的发布者"警告，
+          请按照以下步骤安装我们的代码签名证书：
+          
+          方法1: 双击安装（推荐）
+          1. 双击 PPMeta-CodeSigning-Certificate.cer 文件
+          2. 点击"安装证书..."
+          3. 选择"当前用户"，点击"下一步"
+          4. 选择"将所有的证书都放入下列存储"
+          5. 点击"浏览..."，选择"受信任的发布者"
+          6. 点击"确定"，然后"下一步"，最后"完成"
+          
+          方法2: 使用PowerShell（管理员权限）
+          1. 以管理员身份运行PowerShell
+          2. 执行命令：
+             Import-Certificate -FilePath "PPMeta-CodeSigning-Certificate.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+          
+          方法3: 使用组策略（企业环境）
+          联系您的IT管理员，将此证书添加到"受信任的发布者"组策略中。
+          
+          注意事项：
+          - 安装证书后，PPMeta软件将被Windows信任
+          - 此证书仅用于验证PPMeta软件的真实性
+          - 如果您不信任此证书，请不要安装
+          $(if (-not $isProduction) { "- ⚠️ 这是开发测试证书，不是正式CA颁发的证书" })
+          
+          证书信息：
+          主题: $($cert.Subject)
+          指纹: $($cert.Thumbprint)
+          有效期: $($cert.NotBefore.ToString('yyyy-MM-dd')) 至 $($cert.NotAfter.ToString('yyyy-MM-dd'))
+          "@ | Out-File -FilePath "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" -Encoding UTF8
+          
+          # 更新项目文件中的证书指纹
+          $projFile = "ppmeta\ppmeta.csproj"
+          $content = Get-Content $projFile -Raw
+          $content = $content -replace '<ManifestCertificateThumbprint>.*</ManifestCertificateThumbprint>', "<ManifestCertificateThumbprint>$($cert.Thumbprint)</ManifestCertificateThumbprint>"
+          Set-Content $projFile $content
+
       - name: Build main project
         run: msbuild ppmeta\ppmeta.csproj /p:Configuration=${{ inputs.configuration }} /p:Platform="Any CPU"
 
