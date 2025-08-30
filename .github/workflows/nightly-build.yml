@@ -178,48 +178,141 @@ jobs:
         shell: pwsh
         run: |
           $buildVersion = "${{ steps.commit-info.outputs.build-version }}"
-          $artifactDir = "nightly-$buildVersion"
+          $buildDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC'
+          $commit = git rev-parse HEAD
+          $shortSha = "${{ steps.commit-info.outputs.short-sha }}"
           
-          New-Item -ItemType Directory -Path $artifactDir -Force
+          # 创建两个独立的产物目录
+          $msiPackageDir = "PPMeta-MSI-Nightly-$buildVersion"
+          $vstoPackageDir = "PPMeta-VSTO-Nightly-$buildVersion"
           
-          # 复制主要构建文件
-          Copy-Item "ppmeta\bin\Release\*" $artifactDir -Recurse -Force
+          New-Item -ItemType Directory -Path $msiPackageDir -Force
+          New-Item -ItemType Directory -Path $vstoPackageDir -Force
           
-          # 复制安装程序 (如果存在)
-          if (Test-Path "ppSetup\Release\ppSetup.msi") {
-            Copy-Item "ppSetup\Release\ppSetup.msi" "$artifactDir\ppmeta-nightly-$buildVersion.msi"
-          }
-          
-          # 复制代码签名证书和安装说明
+          # 复制共同的证书文件和安装说明
           if (Test-Path "ppmeta\PPMeta-CodeSigning-Certificate.cer") {
-            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $artifactDir
-            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $artifactDir
-            Write-Host "✅ 已包含代码签名证书和安装说明"
+            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $msiPackageDir
+            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $vstoPackageDir
+          }
+          if (Test-Path "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt") {
+            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $msiPackageDir
+            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $vstoPackageDir
           }
           
-          # 创建构建信息文件
-          @"
-          PPMeta Nightly Build
-          Build Version: $buildVersion
-          Commit: ${{ steps.commit-info.outputs.short-sha }}
-          Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
-          Commits in last 24h: ${{ needs.check-commits.outputs.commit-count }}
+          # ==================== MSI 每夜构建包 ====================
+          if (Test-Path "ppSetup\Release\ppSetup.msi") {
+            Copy-Item "ppSetup\Release\ppSetup.msi" "$msiPackageDir\PPMeta-Nightly-$buildVersion.msi"
+            
+            @"
+          PPMeta MSI 每夜构建包
+          ========================================
           
-          📦 包含文件说明：
-          - ppmeta.dll / ppmeta.vsto          - 主程序文件
-          - PPMeta-CodeSigning-Certificate.cer - 代码签名证书（供手动安装）
-          - CERTIFICATE_INSTALL_GUIDE.txt      - 证书安装说明
-          - ppmeta-nightly-*.msi              - 安装程序（如果可用）
+          构建信息:
+          - 构建版本: $buildVersion
+          - 构建时间: $buildDate
+          - Git提交: $commit ($shortSha)
+          - 构建类型: 每夜自动构建
           
-          🔒 安全提示：
-          如果遇到Windows安全警告，请安装包含的证书文件，详见CERTIFICATE_INSTALL_GUIDE.txt
-          "@ | Out-File -FilePath "$artifactDir\BUILD_INFO.txt" -Encoding UTF8
+          包含文件:
+          - PPMeta-Nightly-$buildVersion.msi: MSI安装程序
+          - PPMeta-CodeSigning-Certificate.cer: 代码签名证书
+          - CERTIFICATE_INSTALL_GUIDE.txt: 证书安装详细指南
+          
+          安装说明:
+          1. 【推荐】先安装证书以避免安全警告：
+             - 双击 PPMeta-CodeSigning-Certificate.cer
+             - 按照 CERTIFICATE_INSTALL_GUIDE.txt 中的详细说明操作
+          2. 双击 PPMeta-Nightly-$buildVersion.msi 开始安装
+          3. 按照安装向导完成PowerPoint插件安装
+          
+          ⚠️ 每夜构建警告:
+          - 这是自动构建的开发版本，可能包含未测试的功能
+          - 不建议在生产环境中使用
+          - 可能存在稳定性问题
+          - 仅供开发者和测试人员使用
+          
+          适用场景:
+          - 开发者测试最新功能
+          - 社区用户尝鲜体验
+          - 问题反馈和Bug测试
+          
+          安全提醒:
+          本软件已经过代码签名，安装证书后Windows将信任PPMeta软件。
+          "@ | Out-File -FilePath "$msiPackageDir\README.txt" -Encoding UTF8
+          } else {
+            Write-Host "⚠️ Warning: MSI installer not found"
+          }
+          
+          # ==================== VSTO 每夜构建包 ====================
+          if (Test-Path "ppmeta\bin\Release") {
+            # 复制VSTO文件
+            Copy-Item "ppmeta\bin\Release\*" $vstoPackageDir -Recurse -Force
+            
+            @"
+          PPMeta VSTO 每夜构建包
+          ========================================
+          
+          构建信息:
+          - 构建版本: $buildVersion
+          - 构建时间: $buildDate
+          - Git提交: $commit ($shortSha)
+          - 构建类型: 每夜自动构建
+          
+          包含文件:
+          - PPMeta.dll: 主要的VSTO程序集
+          - PPMeta.vsto: VSTO部署清单文件
+          - PPMeta.dll.manifest: 应用程序清单
+          - PPMeta-CodeSigning-Certificate.cer: 代码签名证书
+          - CERTIFICATE_INSTALL_GUIDE.txt: 证书安装详细指南
+          - 其他依赖文件和资源
+          
+          安装说明:
+          1. 【必须】先安装证书：
+             - 双击 PPMeta-CodeSigning-Certificate.cer
+             - 按照 CERTIFICATE_INSTALL_GUIDE.txt 中的详细说明操作
+          2. 双击 PPMeta.vsto 文件进行安装
+          3. 如果提示安全警告，点击"安装"
+          
+          ⚠️ 每夜构建警告:
+          - 这是自动构建的开发版本，可能包含未测试的功能
+          - 不建议在生产环境中使用
+          - 可能存在稳定性问题
+          - 仅供开发者和测试人员使用
+          
+          适用场景:
+          - 开发者测试VSTO部署
+          - 自定义安装和配置
+          - 网络共享环境测试
+          - ClickOnce部署验证
+          
+          技术说明:
+          此包包含最新的VSTO部署文件，适合开发者进行功能测试。
+          
+          安全提醒:
+          VSTO插件必须使用受信任的证书签名才能安装。请务必先安装提供的证书。
+          "@ | Out-File -FilePath "$vstoPackageDir\README.txt" -Encoding UTF8
+          } else {
+            Write-Host "⚠️ Warning: VSTO build output not found"
+          }
+          
+          # 创建ZIP文件
+          if (Test-Path $msiPackageDir) {
+            Compress-Archive -Path "$msiPackageDir\*" -DestinationPath "$msiPackageDir.zip"
+            Write-Host "✅ Created MSI nightly package: $msiPackageDir.zip"
+          }
+          
+          if (Test-Path $vstoPackageDir) {
+            Compress-Archive -Path "$vstoPackageDir\*" -DestinationPath "$vstoPackageDir.zip"
+            Write-Host "✅ Created VSTO nightly package: $vstoPackageDir.zip"
+          }
 
       - name: Upload nightly build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ppmeta-nightly-${{ steps.commit-info.outputs.build-version }}
-          path: nightly-${{ steps.commit-info.outputs.build-version }}
+          path: |
+            PPMeta-MSI-Nightly-${{ steps.commit-info.outputs.build-version }}.zip
+            PPMeta-VSTO-Nightly-${{ steps.commit-info.outputs.build-version }}.zip
           retention-days: 30
 
       - name: Get latest commit message
@@ -244,6 +337,15 @@ jobs:
             - Commit: `${{ steps.commit-info.outputs.short-sha }}`
             - Commits in last 24h: `${{ needs.check-commits.outputs.commit-count }}`
             
+            **📦 Package Contents:**
+            - **MSI Package**: Complete installer with certificate and guide
+            - **VSTO Package**: VSTO deployment files with certificate and guide
+            
+            **🔧 Installation:**
+            1. Download either package based on your needs
+            2. Install the certificate first (see included guide)
+            3. Run the installer or VSTO deployment
+            
             **⚠️ Warning:** This is a development build and may be unstable.
             
             **Latest commit:**
@@ -251,7 +353,8 @@ jobs:
             ${{ steps.latest-commit.outputs.message }}
             ```
           files: |
-            nightly-${{ steps.commit-info.outputs.build-version }}/**/*
+            PPMeta-MSI-Nightly-${{ steps.commit-info.outputs.build-version }}.zip
+            PPMeta-VSTO-Nightly-${{ steps.commit-info.outputs.build-version }}.zip
           prerelease: true
           make_latest: false
           token: ${{ secrets.GITHUB_TOKEN }}

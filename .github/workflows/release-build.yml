@@ -174,58 +174,141 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.version }}"
           $tag = "${{ steps.version.outputs.tag }}"
-          $artifactDir = "ppmeta-$version"
+          $buildDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC'
+          $commit = git rev-parse HEAD
           
-          New-Item -ItemType Directory -Path $artifactDir -Force
+          # 创建两个独立的产物目录
+          $msiPackageDir = "PPMeta-MSI-Installer-$version"
+          $vstoPackageDir = "PPMeta-VSTO-Package-$version"
           
-          Copy-Item "ppmeta\bin\Release\*" $artifactDir -Recurse -Force
+          New-Item -ItemType Directory -Path $msiPackageDir -Force
+          New-Item -ItemType Directory -Path $vstoPackageDir -Force
           
-          if (Test-Path "ppSetup\Release\ppSetup.msi") {
-            Copy-Item "ppSetup\Release\ppSetup.msi" "$artifactDir\ppmeta-$version.msi"
-          }
-          
-          # 复制证书文件和安装说明
+          # 复制共同的证书文件和安装说明
           if (Test-Path "ppmeta\PPMeta-CodeSigning-Certificate.cer") {
-            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $artifactDir
+            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $msiPackageDir
+            Copy-Item "ppmeta\PPMeta-CodeSigning-Certificate.cer" $vstoPackageDir
           }
           if (Test-Path "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt") {
-            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $artifactDir
+            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $msiPackageDir
+            Copy-Item "ppmeta\CERTIFICATE_INSTALL_GUIDE.txt" $vstoPackageDir
           }
           
-          if (Test-Path "README.md") {
-            Copy-Item "README.md" $artifactDir
-          }
-          if (Test-Path "LICENSE") {
-            Copy-Item "LICENSE" $artifactDir
-          }
+          # ==================== MSI 安装程序包 ====================
+          if (Test-Path "ppSetup\Release\ppSetup.msi") {
+            Copy-Item "ppSetup\Release\ppSetup.msi" "$msiPackageDir\PPMeta-$version.msi"
+            
+            @"
+          PPMeta MSI 安装程序包
+          ========================================
           
-          @"
-          PPMeta Release Build
-          Version: $version
-          Tag: $tag
-          Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
-          Commit: $(git rev-parse HEAD)
+          版本信息:
+          - 版本: $version
+          - 标签: $tag  
+          - 构建时间: $buildDate
+          - Git提交: $commit
+          
+          包含文件:
+          - PPMeta-$version.msi: MSI安装程序（Windows Installer格式）
+          - PPMeta-CodeSigning-Certificate.cer: 代码签名证书
+          - CERTIFICATE_INSTALL_GUIDE.txt: 证书安装详细指南
           
           安装说明:
-          1. 运行 ppmeta-$version.msi 安装PPMeta
-          2. 如果遇到"Windows无法验证此软件的发布者"警告，请先安装证书：
+          1. 【推荐】先安装证书以避免安全警告：
              - 双击 PPMeta-CodeSigning-Certificate.cer
-             - 按照 CERTIFICATE_INSTALL_GUIDE.txt 中的说明操作
+             - 按照 CERTIFICATE_INSTALL_GUIDE.txt 中的详细说明操作
+          2. 双击 PPMeta-$version.msi 开始安装
+          3. 按照安装向导完成PowerPoint插件安装
           
-          文件说明:
-          - ppmeta-$version.msi: PPMeta安装程序
-          - PPMeta-CodeSigning-Certificate.cer: 代码签名证书（用于信任验证）
-          - CERTIFICATE_INSTALL_GUIDE.txt: 证书安装详细说明
+          适用场景:
+          - 个人用户快速安装
+          - 企业环境集中部署
+          - 支持静默安装参数
+          
+          系统要求:
+          - Windows 10/11
+          - Microsoft PowerPoint 2016或更高版本
+          - .NET Framework 4.8
           
           安全提醒:
-          本软件已经过代码签名，请在安装证书后使用以确保安全性。
-          证书安装后，Windows将信任PPMeta软件，避免安全警告。
+          本软件已经过代码签名，安装证书后Windows将信任PPMeta软件。
+          如果不安装证书，可能会收到"Windows无法验证此软件的发布者"警告。
+          "@ | Out-File -FilePath "$msiPackageDir\README.txt" -Encoding UTF8
+          } else {
+            Write-Host "⚠️ Warning: MSI installer not found at ppSetup\Release\ppSetup.msi"
+          }
           
-          Release Notes:
-          Please see the GitHub release page for detailed release notes.
-          "@ | Out-File -FilePath "$artifactDir\VERSION.txt" -Encoding UTF8
+          # ==================== VSTO 安装程序包 ====================
+          if (Test-Path "ppmeta\bin\Release") {
+            # 复制VSTO文件
+            Copy-Item "ppmeta\bin\Release\*" $vstoPackageDir -Recurse -Force
+            
+            # 复制项目文档
+            if (Test-Path "README.md") {
+              Copy-Item "README.md" $vstoPackageDir
+            }
+            if (Test-Path "LICENSE") {
+              Copy-Item "LICENSE" $vstoPackageDir
+            }
+            
+            @"
+          PPMeta VSTO 开发包
+          ========================================
           
-          Compress-Archive -Path "$artifactDir\*" -DestinationPath "ppmeta-$version.zip"
+          版本信息:
+          - 版本: $version
+          - 标签: $tag
+          - 构建时间: $buildDate
+          - Git提交: $commit
+          
+          包含文件:
+          - PPMeta.dll: 主要的VSTO程序集
+          - PPMeta.vsto: VSTO部署清单文件
+          - PPMeta.dll.manifest: 应用程序清单
+          - PPMeta-CodeSigning-Certificate.cer: 代码签名证书
+          - CERTIFICATE_INSTALL_GUIDE.txt: 证书安装详细指南
+          - 其他依赖文件和资源
+          
+          安装说明:
+          1. 【必须】先安装证书：
+             - 双击 PPMeta-CodeSigning-Certificate.cer
+             - 按照 CERTIFICATE_INSTALL_GUIDE.txt 中的详细说明操作
+          2. 双击 PPMeta.vsto 文件进行安装
+          3. 如果提示安全警告，点击"安装"
+          
+          适用场景:
+          - 开发人员测试部署
+          - 自定义安装需求
+          - 网络共享部署
+          - ClickOnce部署方式
+          
+          系统要求:
+          - Windows 10/11
+          - Microsoft PowerPoint 2016或更高版本
+          - .NET Framework 4.8
+          - Visual Studio Tools for Office Runtime
+          
+          技术说明:
+          VSTO (Visual Studio Tools for Office) 是微软提供的Office插件开发框架。
+          此包包含完整的VSTO部署文件，可用于直接安装或进一步定制部署。
+          
+          安全提醒:
+          VSTO插件必须使用受信任的证书签名才能安装。请务必先安装提供的证书。
+          "@ | Out-File -FilePath "$vstoPackageDir\README.txt" -Encoding UTF8
+          } else {
+            Write-Host "⚠️ Warning: VSTO build output not found at ppmeta\bin\Release"
+          }
+          
+          # 创建ZIP文件
+          if (Test-Path $msiPackageDir) {
+            Compress-Archive -Path "$msiPackageDir\*" -DestinationPath "$msiPackageDir.zip"
+            Write-Host "✅ Created MSI package: $msiPackageDir.zip"
+          }
+          
+          if (Test-Path $vstoPackageDir) {
+            Compress-Archive -Path "$vstoPackageDir\*" -DestinationPath "$vstoPackageDir.zip"
+            Write-Host "✅ Created VSTO package: $vstoPackageDir.zip"
+          }
 
       - name: Generate release notes
         id: release-notes
@@ -258,10 +341,10 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ppmeta-${{ steps.version.outputs.version }}
+          name: ppmeta-release-${{ steps.version.outputs.version }}
           path: |
-            ppmeta-${{ steps.version.outputs.version }}.zip
-            ppmeta-${{ steps.version.outputs.version }}/
+            PPMeta-MSI-Installer-${{ steps.version.outputs.version }}.zip
+            PPMeta-VSTO-Package-${{ steps.version.outputs.version }}.zip
           retention-days: 90
 
       - name: Create GitHub release
@@ -271,8 +354,8 @@ jobs:
           name: "PPMeta ${{ steps.version.outputs.version }}"
           body_path: ${{ steps.release-notes.outputs.notes-file }}
           files: |
-            ppmeta-${{ steps.version.outputs.version }}.zip
-            ppmeta-${{ steps.version.outputs.version }}/ppmeta-${{ steps.version.outputs.version }}.msi
+            PPMeta-MSI-Installer-${{ steps.version.outputs.version }}.zip
+            PPMeta-VSTO-Package-${{ steps.version.outputs.version }}.zip
           prerelease: ${{ steps.version.outputs.is-prerelease == 'true' }}
           make_latest: ${{ steps.version.outputs.is-prerelease == 'false' }}
           token: ${{ secrets.GITHUB_TOKEN }}
