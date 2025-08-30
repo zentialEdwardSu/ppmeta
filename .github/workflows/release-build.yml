@@ -12,6 +12,10 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write  # 需要写入权限来创建release
+  actions: read    # 需要读取actions权限
+
 jobs:
   release-build:
     runs-on: windows-latest
