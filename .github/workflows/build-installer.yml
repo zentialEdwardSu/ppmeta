@@ -149,10 +149,42 @@ jobs:
           if (Test-Path "ppSetup\ppSetup.vdproj") {
             Write-Host "Building Visual Studio installer project with devenv..."
             Write-Host "Configuration: $configuration"
+            
+            # 先检查ppmeta项目的输出
+            Write-Host "Checking ppmeta project output before building installer..."
+            if (Test-Path "ppmeta\bin\$configuration\ppmeta.dll") {
+              Write-Host "✅ ppmeta.dll found in bin\$configuration"
+            }
+            if (Test-Path "ppmeta\obj\$configuration\ppmeta.dll") {
+              Write-Host "✅ ppmeta.dll found in obj\$configuration"
+            } else {
+              Write-Host "❌ ppmeta.dll NOT found in obj\$configuration"
+              Write-Host "Installing directly to obj directory..."
+              
+              # 确保obj目录存在并复制必要文件
+              New-Item -ItemType Directory -Path "ppmeta\obj\$configuration" -Force | Out-Null
+              
+              if (Test-Path "ppmeta\bin\$configuration\ppmeta.dll") {
+                Copy-Item "ppmeta\bin\$configuration\ppmeta.dll" "ppmeta\obj\$configuration\" -Force
+                Write-Host "✅ Copied ppmeta.dll to obj\$configuration"
+              }
+              
+              if (Test-Path "ppmeta\bin\$configuration\ppmeta.dll.manifest") {
+                Copy-Item "ppmeta\bin\$configuration\ppmeta.dll.manifest" "ppmeta\obj\$configuration\" -Force
+                Write-Host "✅ Copied ppmeta.dll.manifest to obj\$configuration"
+              }
+              
+              if (Test-Path "ppmeta\bin\$configuration\ppmeta.vsto") {
+                Copy-Item "ppmeta\bin\$configuration\ppmeta.vsto" "ppmeta\obj\$configuration\" -Force
+                Write-Host "✅ Copied ppmeta.vsto to obj\$configuration"
+              }
+            }
+            
             Write-Host "Note: devenv will automatically build ppmeta project dependencies if needed"
             
             try {
               # 使用/build命令构建整个解决方案，指定安装程序项目
+              Write-Host "Running: devenv ppmeta.sln /build $configuration /project ppSetup"
               devenv ppmeta.sln /build $configuration /project ppSetup
               
               $msiPath = "ppSetup\$configuration\ppSetup.msi"
@@ -163,22 +195,73 @@ jobs:
                 echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
               } else {
                 Write-Host "❌ Installer was not created at expected path: $msiPath"
-                Write-Host "Checking alternative locations..."
-                Get-ChildItem -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found MSI: $($_.FullName)" }
+                Write-Host "Checking all possible output locations..."
+                
+                # 搜索所有可能的MSI文件位置
+                $msiFiles = Get-ChildItem -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue
+                if ($msiFiles) {
+                  Write-Host "Found MSI files:"
+                  $msiFiles | ForEach-Object { Write-Host "  $($_.FullName) ($(([math]::Round($_.Length/1KB, 2))) KB)" }
+                } else {
+                  Write-Host "No MSI files found anywhere"
+                }
+                
+                # 检查ppSetup目录内容
+                if (Test-Path "ppSetup") {
+                  Write-Host "Contents of ppSetup directory:"
+                  Get-ChildItem "ppSetup" -Recurse | ForEach-Object { 
+                    if ($_.PSIsContainer) {
+                      Write-Host "  📁 $($_.FullName)"
+                    } else {
+                      Write-Host "  📄 $($_.FullName) ($(([math]::Round($_.Length/1KB, 2))) KB)"
+                    }
+                  }
+                } else {
+                  Write-Host "ppSetup directory not found"
+                }
+                
                 throw "Installer build failed - MSI not found"
               }
             }
             catch {
-              Write-Host "Failed to build installer: $($_.Exception.Message)"
-              Write-Host "Checking for partial build outputs..."
-              if (Test-Path "ppSetup\$configuration") {
-                Write-Host "Contents of ppSetup\$configuration:"
-                Get-ChildItem "ppSetup\$configuration" | ForEach-Object { Write-Host "   $($_.Name)" }
+              Write-Host "❌ Failed to build installer: $($_.Exception.Message)"
+              Write-Host ""
+              Write-Host "🔍 Diagnostic Information:"
+              Write-Host "Configuration: $configuration"
+              Write-Host "Working Directory: $(Get-Location)"
+              
+              # 检查ppmeta项目状态
+              Write-Host ""
+              Write-Host "📂 ppmeta project files:"
+              if (Test-Path "ppmeta\bin\$configuration") {
+                Write-Host "  bin\$configuration contents:"
+                Get-ChildItem "ppmeta\bin\$configuration" | ForEach-Object { Write-Host "    $($_.Name)" }
+              } else {
+                Write-Host "  ❌ bin\$configuration directory not found"
               }
+              
+              if (Test-Path "ppmeta\obj\$configuration") {
+                Write-Host "  obj\$configuration contents:"
+                Get-ChildItem "ppmeta\obj\$configuration" | ForEach-Object { Write-Host "    $($_.Name)" }
+              } else {
+                Write-Host "  ❌ obj\$configuration directory not found"
+              }
+              
+              # 检查ppSetup项目状态
+              Write-Host ""
+              Write-Host "📂 ppSetup project files:"
+              if (Test-Path "ppSetup") {
+                Get-ChildItem "ppSetup" | ForEach-Object { Write-Host "  $($_.Name)" }
+              } else {
+                Write-Host "  ❌ ppSetup directory not found"
+              }
+              
               throw
             }
           } else {
             Write-Host "❌ No installer project found at ppSetup\ppSetup.vdproj"
+            Write-Host "Available files in current directory:"
+            Get-ChildItem -Recurse -Filter "*.vdproj" | ForEach-Object { Write-Host "  $($_.FullName)" }
             throw "Installer project not found"
           }
 

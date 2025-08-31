@@ -149,10 +149,42 @@ jobs:
         run: |
           if (Test-Path "ppSetup\ppSetup.vdproj") {
             Write-Host "Building Visual Studio installer project with devenv..."
+            
+            # 先检查ppmeta项目的输出
+            Write-Host "Checking ppmeta project output before building installer..."
+            if (Test-Path "ppmeta\bin\Release\ppmeta.dll") {
+              Write-Host "✅ ppmeta.dll found in bin\Release"
+            }
+            if (Test-Path "ppmeta\obj\Release\ppmeta.dll") {
+              Write-Host "✅ ppmeta.dll found in obj\Release"
+            } else {
+              Write-Host "❌ ppmeta.dll NOT found in obj\Release"
+              Write-Host "Installing directly to obj directory..."
+              
+              # 确保obj目录存在并复制必要文件
+              New-Item -ItemType Directory -Path "ppmeta\obj\Release" -Force | Out-Null
+              
+              if (Test-Path "ppmeta\bin\Release\ppmeta.dll") {
+                Copy-Item "ppmeta\bin\Release\ppmeta.dll" "ppmeta\obj\Release\" -Force
+                Write-Host "✅ Copied ppmeta.dll to obj\Release"
+              }
+              
+              if (Test-Path "ppmeta\bin\Release\ppmeta.dll.manifest") {
+                Copy-Item "ppmeta\bin\Release\ppmeta.dll.manifest" "ppmeta\obj\Release\" -Force
+                Write-Host "✅ Copied ppmeta.dll.manifest to obj\Release"
+              }
+              
+              if (Test-Path "ppmeta\bin\Release\ppmeta.vsto") {
+                Copy-Item "ppmeta\bin\Release\ppmeta.vsto" "ppmeta\obj\Release\" -Force
+                Write-Host "✅ Copied ppmeta.vsto to obj\Release"
+              }
+            }
+            
             Write-Host "Note: devenv will automatically build ppmeta project dependencies if needed"
             
             try {
               # 使用/build命令，这会自动处理项目依赖关系
+              Write-Host "Running: devenv ppmeta.sln /build Release /project ppSetup"
               devenv ppmeta.sln /build Release /project ppSetup
               Write-Host "Installer built successfully with dependencies"
               
@@ -165,6 +197,21 @@ jobs:
                 Write-Host "❌ MSI installer not found at expected location"
                 Write-Host "Checking alternative locations..."
                 Get-ChildItem -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found MSI: $($_.FullName)" }
+                
+                # 详细诊断信息
+                Write-Host ""
+                Write-Host "🔍 Diagnostic Information:"
+                if (Test-Path "ppSetup") {
+                  Write-Host "ppSetup directory contents:"
+                  Get-ChildItem "ppSetup" -Recurse | ForEach-Object { 
+                    if ($_.PSIsContainer) {
+                      Write-Host "  📁 $($_.FullName)"
+                    } else {
+                      Write-Host "  📄 $($_.FullName) ($(([math]::Round($_.Length/1KB, 2))) KB)"
+                    }
+                  }
+                }
+                throw "MSI installer not found"
               }
             }
             catch {
