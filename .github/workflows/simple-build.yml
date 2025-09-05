@@ -30,7 +30,7 @@ jobs:
       run: nuget restore ppmeta.sln
         
     - name: Build VSTO
-      run: msbuild ppmeta\ppmeta.csproj -p:Configuration=Release -p:Platform="Any CPU"
+      run: msbuild ppmeta\ppmeta.sln -p:Configuration=Release -p:Platform="Any CPU"
         
     - name: Build Installer
       run: devenv.com ppmeta.sln /build "Release"
