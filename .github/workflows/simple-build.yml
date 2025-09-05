@@ -103,7 +103,7 @@ jobs:
         }
         
         try {
-          msbuild "${{ github.workspace }}\ppmeta\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo -verbosity:normal -flp:logfile=build.log
+          msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo -verbosity:normal -flp:logfile=build.log
         } catch {
           Write-Error "Build failed: $($_.Exception.Message)"
           if (Test-Path "build.log") {
@@ -114,7 +114,28 @@ jobs:
         }
         
     - name: Build Installer
-      run: devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
+      shell: pwsh
+      run: |
+        Write-Host "Building installer..."
+        Write-Host "ppSetup project path: ${{ github.workspace }}\ppSetup\ppSetup.vdproj"
+        
+        if (Test-Path "${{ github.workspace }}\ppSetup\ppSetup.vdproj") {
+          Write-Host "ppSetup project file found"
+          
+          # Use devenv to build the installer project
+          devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
+          
+          # Check if build succeeded
+          if (Test-Path "${{ github.workspace }}\ppSetup\Release\ppSetup.msi") {
+            Write-Host "Installer build succeeded: ppSetup.msi created"
+          } else {
+            Write-Error "Installer build failed: ppSetup.msi not found"
+            exit 1
+          }
+        } else {
+          Write-Error "ppSetup project file not found"
+          exit 1
+        }
 
     - name: Upload Results
       uses: actions/upload-artifact@v4
