@@ -305,6 +305,9 @@
   <PropertyGroup>
     <ManifestCertificateThumbprint>CC6A4CDC58A67760D8DFF45C94E53731AF32B911</ManifestCertificateThumbprint>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(SignManifests)' == 'true'">
+    <GenerateManifests>true</GenerateManifests>
+  </PropertyGroup>
   <!-- Include the build rules for a C# project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- Include additional build rules for an Office application add-in. -->
