@@ -70,7 +70,7 @@ jobs:
         }
         
     - name: Build VSTO
-      run: msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform=AnyCPU -p:VisualStudioVersion="17.0" -nologo
+      run: msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
         
     - name: Build Installer
       run: devenv.com "${{ github.workspace }}\ppmeta.sln" /build "Release"
