@@ -21,19 +21,59 @@ jobs:
     - name: Import Certificate
       shell: pwsh
       run: |
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERTIFICATE }}")) {
+          Write-Error "VSTO_CERTIFICATE secret is not set"
+          exit 1
+        }
+        
+        Write-Host "Creating certificate file..."
         $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
-        [System.IO.File]::WriteAllBytes(".\ppmeta\ppmeta_TemporaryKey.pfx", $certBytes)
+        $certPath = "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx"
+        [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+        Write-Host "Certificate file created at: $certPath"
+        
+        # Verify file exists
+        if (Test-Path $certPath) {
+          Write-Host "Certificate file verified"
+          $fileInfo = Get-Item $certPath
+          Write-Host "File size: $($fileInfo.Length) bytes"
+        } else {
+          Write-Error "Certificate file creation failed"
+          exit 1
+        }
+        
+        Write-Host "Importing certificate..."
         $pwd = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
-        Import-PfxCertificate -FilePath ".\ppmeta\ppmeta_TemporaryKey.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+        try {
+          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+          Write-Host "Certificate imported successfully with thumbprint: $($cert.Thumbprint)"
+        } catch {
+          Write-Error "Certificate import failed: $($_.Exception.Message)"
+          exit 1
+        }
         
     - name: Restore packages
-      run: nuget restore ppmeta.sln
+      run: nuget restore "${{ github.workspace }}\ppmeta.sln"
+      
+    - name: Check project configuration
+      shell: pwsh
+      run: |
+        Write-Host "Workspace directory contents:"
+        Get-ChildItem -Path "${{ github.workspace }}" -Name
+        Write-Host "ppmeta directory contents:"
+        Get-ChildItem -Path "${{ github.workspace }}\ppmeta" -Name
+        Write-Host "Checking project file..."
+        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta.csproj") {
+          Write-Host "Project file exists"
+        } else {
+          Write-Host "Project file NOT found"
+        }
         
     - name: Build VSTO
-      run: msbuild ppmeta\ppmeta.sln -p:Configuration=Release -p:Platform="Any CPU"
+      run: msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform=AnyCPU -p:VisualStudioVersion="17.0" -nologo
         
     - name: Build Installer
-      run: devenv.com ppmeta.sln /build "Release"
+      run: devenv.com "${{ github.workspace }}\ppmeta.sln" /build "Release"
         
     - name: Upload Results
       uses: actions/upload-artifact@v4
@@ -42,5 +82,6 @@ jobs:
         path: ppSetup/Release/
         
     - name: Cleanup
+      if: always()
       shell: pwsh
-      run: Remove-Item ".\ppmeta\ppmeta_TemporaryKey.pfx" -ErrorAction SilentlyContinue
+      run: Remove-Item "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx" -ErrorAction SilentlyContinue
