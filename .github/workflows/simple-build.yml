@@ -1,0 +1,46 @@
+name: Simple VSTO Build
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup VS Dev Environment
+      uses: seanmiddleditch/gha-setup-vsdevenv@v4
+      
+    - name: Import Certificate
+      shell: pwsh
+      run: |
+        $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
+        [System.IO.File]::WriteAllBytes(".\ppmeta\ppmeta_TemporaryKey.pfx", $certBytes)
+        $pwd = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
+        Import-PfxCertificate -FilePath ".\ppmeta\ppmeta_TemporaryKey.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+        
+    - name: Restore packages
+      run: nuget restore ppmeta.sln
+        
+    - name: Build VSTO
+      run: msbuild ppmeta\ppmeta.csproj -p:Configuration=Release -p:Platform="Any CPU"
+        
+    - name: Build Installer
+      run: devenv.com ppmeta.sln /build "Release"
+        
+    - name: Upload Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: Installer
+        path: ppSetup/Release/
+        
+    - name: Cleanup
+      shell: pwsh
+      run: Remove-Item ".\ppmeta\ppmeta_TemporaryKey.pfx" -ErrorAction SilentlyContinue

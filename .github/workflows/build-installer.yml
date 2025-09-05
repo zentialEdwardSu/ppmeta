@@ -1,116 +1,126 @@
-name: Build Installer
+name: Build VSTO Installer
 
 on:
-  workflow_call:
-    inputs:
-      configuration:
-        required: true
-        type: string
-        default: 'Release'
-    secrets:
-      VSTO_CERTIFICATE:
-        required: false
-      VSTO_CERT_THUMBPRINT:
-        required: false  
-      VSTO_CERT_PASSWORD:
-        required: false
-    outputs:
-      installer-path:
-        description: "Path to the built installer"
-        value: ${{ jobs.build-installer.outputs.installer-path }}
-        
+  push:
+    branches: [ master, main, release ]
+  pull_request:
+    branches: [ master, main, release ]
   workflow_dispatch:
-    inputs:
-      configuration:
-        description: 'Build configuration'
-        required: true
-        default: 'Release'
-        type: choice
-        options:
-        - Release
-        - Debug
 
 jobs:
-  build-installer:
-    runs-on: windows-latest
-    outputs:
-      installer-path: ${{ steps.build.outputs.installer-path }}
-      
+  build:
+    runs-on: windows-2022
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Setup NuGet
-        uses: nuget/setup-nuget@v2
-
-      - name: Restore NuGet packages
-        run: nuget restore ppmeta.sln
-
-      - name: Import Certificate
-        shell: pwsh
-        env:
-          VSTO_CERTIFICATE: ${{ secrets.VSTO_CERTIFICATE }}
-          VSTO_CERT_PASSWORD: ${{ secrets.VSTO_CERT_PASSWORD }}
-        run: |
-          if ($env:VSTO_CERTIFICATE) {
-            $certBytes = [System.Convert]::FromBase64String($env:VSTO_CERTIFICATE)
-            [System.IO.File]::WriteAllBytes("ppmeta\cert.pfx", $certBytes)
-            $password = ConvertTo-SecureString "$env:VSTO_CERT_PASSWORD" -AsPlainText -Force
-            Import-PfxCertificate -FilePath "ppmeta\cert.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          } else {
-            Write-Host "No certificate provided, using project default"
-          }
-
-      - name: DisableOutOfProc Fix
-        shell: pwsh
-        run: |
-          $vsWherePath = "${Env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vsWherePath -latest -products * -property 'installationPath'
-          $disableOutOfProcPath = "$vsPath\Common7\IDE\CommonExtensions\Microsoft\VSI\DisableOutOfProcBuild"
-          if (Test-Path $disableOutOfProcPath) {
-            Set-Location $disableOutOfProcPath
-            & ".\DisableOutOfProcBuild.exe"
-            Write-Host "DisableOutOfProcBuild executed"
-          } else {
-            Write-Host "DisableOutOfProcBuild not found, skipping"
-          }
-
-      - name: Setup VS Dev Environment
-        uses: seanmiddleditch/gha-setup-vsdevenv@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '17.0'
         
-      - name: Build VSTO Project
-        run: msbuild ppmeta\ppmeta.csproj -t:rebuild /p:Platform="Any CPU" /p:Configuration="${{ inputs.configuration }}" /p:VisualStudioVersion="17.0" /nologo
-
-      - name: Build Installer
-        id: build
-        shell: pwsh
-        run: |
-          $configuration = "${{ inputs.configuration }}"
-          devenv.com ppSetup\ppSetup.vdproj /build $configuration
+    - name: Setup Visual Studio Dev Environment
+      uses: seanmiddleditch/gha-setup-vsdevenv@v4
+      
+    - name: Create certificate file from secret
+      shell: pwsh
+      run: |
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERTIFICATE }}")) {
+          Write-Error "VSTO_CERTIFICATE secret is not set"
+          exit 1
+        }
+        $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
+        [System.IO.File]::WriteAllBytes("${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx", $certBytes)
+        Write-Host "Certificate file created successfully"
+        
+    - name: Import VSTO certificate
+      shell: pwsh
+      run: |
+        $Secure_String_Pwd = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
+        $cert = Import-PfxCertificate -FilePath '${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx' -CertStoreLocation Cert:\CurrentUser\My -Password $Secure_String_Pwd
+        Write-Host "Certificate imported with thumbprint: $($cert.Thumbprint)"
+        
+    - name: Restore NuGet packages
+      run: |
+        nuget restore "${{ github.workspace }}\ppmeta.sln"
+        
+    - name: Build VSTO project first
+      run: |
+        msbuild "${{ github.workspace }}\ppmeta\ppmeta.csproj" -t:rebuild -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
+        
+    - name: DisableOutOfProcBuild Fix for VS2022
+      shell: pwsh
+      run: |
+        function Invoke-DisableOutOfProcBuild {
+          param ();
+          $visualStudioWherePath = ('{0}/Microsoft Visual Studio/Installer/vswhere.exe' -f ${Env:ProgramFiles(x86)});
+          $visualStudioInstallationPath = & $visualStudioWherePath -latest -property 'installationPath';
           
-          $msiPath = "ppSetup\$configuration\ppSetup.msi"
-          if (Test-Path $msiPath) {
-            Write-Host "✅ Installer built successfully: $msiPath"
-            echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
-          } else {
-            # 查找MSI文件
-            $msiFiles = Get-ChildItem -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue
-            if ($msiFiles) {
-              $msiPath = $msiFiles[0].FullName
-              Write-Host "✅ Found installer at: $msiPath"
-              echo "installer-path=$msiPath" >> $env:GITHUB_OUTPUT
+          if ($visualStudioInstallationPath) {
+            $currentWorkingDirectory = ('{0}/Common7/IDE/CommonExtensions/Microsoft/VSI/DisableOutOfProcBuild' -f $visualStudioInstallationPath);
+            
+            if (Test-Path $currentWorkingDirectory) {
+              Set-Location -Path $currentWorkingDirectory;
+              $disableOutOfProcBuildPath = ('{0}/DisableOutOfProcBuild.exe' -f $currentWorkingDirectory);
+              
+              if (Test-Path $disableOutOfProcBuildPath) {
+                & $disableOutOfProcBuildPath;
+                Write-Host "DisableOutOfProcBuild applied successfully"
+              } else {
+                Write-Host "DisableOutOfProcBuild.exe not found, skipping..."
+              }
             } else {
-              Write-Host "❌ Installer build failed"
-              exit 1
+              Write-Host "DisableOutOfProcBuild directory not found, skipping..."
             }
           }
-
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: installer-${{ inputs.configuration }}
-          path: ${{ steps.build.outputs.installer-path }}
-          retention-days: 30
+          
+          return;
+        }
+        Invoke-DisableOutOfProcBuild
+        
+    - name: Build Visual Studio Installer Project
+      shell: cmd
+      run: |
+        echo Building installer project...
+        devenv.com "${{ github.workspace }}\ppmeta.sln" /build "Release"
+        
+    - name: List output files for debugging
+      shell: pwsh
+      run: |
+        Write-Host "Listing ppSetup directory contents:"
+        if (Test-Path "${{ github.workspace }}\ppSetup") {
+          Get-ChildItem -Path "${{ github.workspace }}\ppSetup" -Recurse
+        }
+        Write-Host "Listing ppmeta bin directory contents:"
+        if (Test-Path "${{ github.workspace }}\ppmeta\bin") {
+          Get-ChildItem -Path "${{ github.workspace }}\ppmeta\bin" -Recurse
+        }
+        
+    - name: Upload installer artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: VSTO-Installer
+        path: |
+          ppSetup/Release/*.msi
+          ppSetup/Release/setup.exe
+        retention-days: 30
+        if-no-files-found: warn
+        
+    - name: Upload VSTO deployment files
+      uses: actions/upload-artifact@v4
+      with:
+        name: VSTO-Deployment
+        path: |
+          ppmeta/bin/Release/
+        retention-days: 30
+        if-no-files-found: warn
+        
+    - name: Cleanup certificate file
+      if: always()
+      shell: pwsh
+      run: |
+        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx") {
+          Remove-Item "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx" -Force
+          Write-Host "Certificate file cleaned up"
+        }

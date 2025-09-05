@@ -1,0 +1,190 @@
+name: Release VSTO Installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for the release'
+        required: true
+        default: '1.0.0'
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '17.0'
+        
+    - name: Setup Visual Studio Dev Environment
+      uses: seanmiddleditch/gha-setup-vsdevenv@v4
+      
+    - name: Create certificate file from secret
+      shell: pwsh
+      run: |
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERTIFICATE }}")) {
+          Write-Error "VSTO_CERTIFICATE secret is not set"
+          exit 1
+        }
+        $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
+        [System.IO.File]::WriteAllBytes("${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx", $certBytes)
+        Write-Host "Certificate file created successfully"
+        
+    - name: Import VSTO certificate
+      shell: pwsh
+      run: |
+        $Secure_String_Pwd = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
+        $cert = Import-PfxCertificate -FilePath '${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx' -CertStoreLocation Cert:\CurrentUser\My -Password $Secure_String_Pwd
+        Write-Host "Certificate imported with thumbprint: $($cert.Thumbprint)"
+        
+    - name: Update version in AssemblyInfo
+      shell: pwsh
+      run: |
+        $version = "${{ github.event.inputs.version }}"
+        if ([string]::IsNullOrEmpty($version)) {
+          $version = "${{ github.event.release.tag_name }}" -replace '^v', ''
+        }
+        if ([string]::IsNullOrEmpty($version)) {
+          $version = "1.0.0"
+        }
+        
+        $assemblyInfoPath = "${{ github.workspace }}\ppmeta\Properties\AssemblyInfo.cs"
+        if (Test-Path $assemblyInfoPath) {
+          $content = Get-Content $assemblyInfoPath -Raw
+          $content = $content -replace 'AssemblyVersion\("[\d\.]+"\)', "AssemblyVersion(`"$version.0`")"
+          $content = $content -replace 'AssemblyFileVersion\("[\d\.]+"\)', "AssemblyFileVersion(`"$version.0`")"
+          Set-Content $assemblyInfoPath $content
+          Write-Host "Updated version to $version in AssemblyInfo.cs"
+        }
+        
+    - name: Restore NuGet packages
+      run: |
+        nuget restore "${{ github.workspace }}\ppmeta.sln"
+        
+    - name: Build VSTO project
+      run: |
+        msbuild "${{ github.workspace }}\ppmeta\ppmeta.csproj" -t:rebuild -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
+        
+    - name: DisableOutOfProcBuild Fix for VS2022
+      shell: pwsh
+      run: |
+        function Invoke-DisableOutOfProcBuild {
+          param ();
+          $visualStudioWherePath = ('{0}/Microsoft Visual Studio/Installer/vswhere.exe' -f ${Env:ProgramFiles(x86)});
+          $visualStudioInstallationPath = & $visualStudioWherePath -latest -property 'installationPath';
+          
+          if ($visualStudioInstallationPath) {
+            $currentWorkingDirectory = ('{0}/Common7/IDE/CommonExtensions/Microsoft/VSI/DisableOutOfProcBuild' -f $visualStudioInstallationPath);
+            
+            if (Test-Path $currentWorkingDirectory) {
+              Set-Location -Path $currentWorkingDirectory;
+              $disableOutOfProcBuildPath = ('{0}/DisableOutOfProcBuild.exe' -f $currentWorkingDirectory);
+              
+              if (Test-Path $disableOutOfProcBuildPath) {
+                & $disableOutOfProcBuildPath;
+                Write-Host "DisableOutOfProcBuild applied successfully"
+              }
+            }
+          }
+          
+          return;
+        }
+        Invoke-DisableOutOfProcBuild
+        
+    - name: Build Visual Studio Installer Project
+      shell: cmd
+      run: |
+        echo Building installer project for release...
+        devenv.com "${{ github.workspace }}\ppmeta.sln" /build "Release"
+        
+    - name: Sign installer MSI (if certificate available)
+      shell: pwsh
+      run: |
+        $msiPath = Get-ChildItem -Path "${{ github.workspace }}\ppSetup\Release" -Filter "*.msi" | Select-Object -First 1
+        if ($msiPath -and (Test-Path $msiPath.FullName)) {
+          try {
+            $signToolPath = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe"
+            $signTool = Get-ChildItem -Path $signToolPath | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            
+            if ($signTool) {
+              & $signTool.FullName sign /sha1 "${{ secrets.VSTO_CERT_THUMBPRINT }}" /t http://timestamp.digicert.com /fd sha256 $msiPath.FullName
+              Write-Host "MSI signed successfully"
+            } else {
+              Write-Host "SignTool not found, skipping MSI signing"
+            }
+          } catch {
+            Write-Host "Failed to sign MSI: $($_.Exception.Message)"
+          }
+        } else {
+          Write-Host "MSI file not found for signing"
+        }
+        
+    - name: Create release package
+      shell: pwsh
+      run: |
+        $releaseDir = "${{ github.workspace }}\release-package"
+        New-Item -ItemType Directory -Path $releaseDir -Force
+        
+        # Copy installer files
+        if (Test-Path "${{ github.workspace }}\ppSetup\Release") {
+          Copy-Item "${{ github.workspace }}\ppSetup\Release\*" -Destination $releaseDir -Recurse
+        }
+        
+        # Copy VSTO deployment files
+        if (Test-Path "${{ github.workspace }}\ppmeta\bin\Release") {
+          $vstoDir = "$releaseDir\VSTO"
+          New-Item -ItemType Directory -Path $vstoDir -Force
+          Copy-Item "${{ github.workspace }}\ppmeta\bin\Release\*" -Destination $vstoDir -Recurse
+        }
+        
+        Write-Host "Release package created in $releaseDir"
+        
+    - name: Upload to GitHub Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ppSetup/Release/*.msi
+          ppSetup/Release/setup.exe
+        body: |
+          ## VSTO PowerPoint Add-in Release
+          
+          This release contains:
+          - MSI installer package
+          - Setup executable
+          - VSTO deployment files
+          
+          ### Installation Instructions:
+          1. Download the MSI file or run setup.exe
+          2. Follow the installation wizard
+          3. The add-in will be available in PowerPoint after installation
+          
+          ### Requirements:
+          - Microsoft PowerPoint (Office 365 or 2019+)
+          - .NET Framework 4.8 or later
+          - VSTO Runtime (automatically installed if needed)
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Release-Package-${{ github.run_number }}
+        path: |
+          ppSetup/Release/
+          ppmeta/bin/Release/
+        retention-days: 90
+        
+    - name: Cleanup certificate file
+      if: always()
+      shell: pwsh
+      run: |
+        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx") {
+          Remove-Item "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx" -Force
+          Write-Host "Certificate file cleaned up"
+        }
