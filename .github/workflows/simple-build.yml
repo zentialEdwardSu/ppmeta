@@ -17,6 +17,24 @@ jobs:
       
     - name: Setup VS Dev Environment
       uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+    - name: DisableOutOfProc Fix
+      run: |
+        function Invoke-DisableOutOfProcBuild {
+            param ();
+            $visualStudioWherePath = ('{0}/Microsoft Visual Studio/Installer/vswhere.exe' -f ${Env:ProgramFiles(x86)});
+            $visualStudioInstallationPath = & $visualStudioWherePath -latest -products 'Microsoft.VisualStudio.Product.Enterprise' -property 'installationPath';
+            $currentWorkingDirectory = ('{0}/Common7/IDE/CommonExtensions/Microsoft/VSI/DisableOutOfProcBuild' -f $visualStudioInstallationPath);
+            
+            Set-Location -Path $currentWorkingDirectory;
+            
+            $disableOutOfProcBuildPath = ('{0}/DisableOutOfProcBuild.exe' -f $currentWorkingDirectory);
+            
+            & $disableOutOfProcBuildPath;
+            
+            return;
+        }
+        Invoke-DisableOutOfProcBuild
       
     - name: Import Certificate
       shell: pwsh
