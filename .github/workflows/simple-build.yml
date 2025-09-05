@@ -47,41 +47,39 @@ jobs:
           exit 1
         }
         
-        Write-Host "Importing certificate using certutil..."
+        Write-Host "Importing certificate to Windows certificate store..."
         try {
           $certPassword = "${{ secrets.VSTO_CERT_PASSWORD }}"
-
-          $result = cmd /c "certutil -f -p `"$certPassword`" -importpfx `"$certPath`""
+          $securePassword = ConvertTo-SecureString -String $certPassword -AsPlainText -Force
           
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Certificate imported successfully using certutil"
-            Write-Host "certutil output: $result"
+          # Import the certificate to the current user's personal certificate store
+          $importResult = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\My" -Password $securePassword -Exportable
+          
+          if ($importResult) {
+            Write-Host "Certificate imported successfully to Cert:\CurrentUser\My"
+            Write-Host "Certificate thumbprint: $($importResult.Thumbprint)"
+            Write-Host "Certificate subject: $($importResult.Subject)"
+            
+            # Verify the certificate is accessible
+            $installedCert = Get-ChildItem -Path "Cert:\CurrentUser\My" | Where-Object { $_.Thumbprint -eq $importResult.Thumbprint }
+            if ($installedCert) {
+              Write-Host "Certificate verification successful"
+            } else {
+              Write-Error "Certificate verification failed - certificate not found in store"
+              exit 1
+            }
           } else {
-            Write-Error "certutil failed with exit code: $LASTEXITCODE"
-            Write-Error "certutil output: $result"
+            Write-Error "Certificate import failed - Import-PfxCertificate returned null"
             exit 1
           }
         } catch {
           Write-Error "Certificate import failed: $($_.Exception.Message)"
+          Write-Error "Stack trace: $($_.ScriptStackTrace)"
           exit 1
         }
         
     - name: Restore packages
       run: nuget restore "${{ github.workspace }}\ppmeta.sln"
-      
-    - name: Check project configuration
-      shell: pwsh
-      run: |
-        Write-Host "Workspace directory contents:"
-        Get-ChildItem -Path "${{ github.workspace }}" -Name
-        Write-Host "ppmeta directory contents:"
-        Get-ChildItem -Path "${{ github.workspace }}\ppmeta" -Name
-        Write-Host "Checking project file..."
-        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta.sln") {
-          Write-Host "Project file exists"
-        } else {
-          Write-Host "Project file NOT found"
-        }
         
     - name: Build VSTO
       run: msbuild "${{ github.workspace }}\ppmeta\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
