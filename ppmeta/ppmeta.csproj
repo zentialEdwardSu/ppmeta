@@ -300,10 +300,11 @@
     <SignManifests>true</SignManifests>
   </PropertyGroup>
   <PropertyGroup>
-    <ManifestKeyFile>ppmeta_TemporaryKey.pfx</ManifestKeyFile>
+    <ManifestKeyFile>
+    </ManifestKeyFile>
   </PropertyGroup>
   <PropertyGroup>
-    <ManifestCertificateThumbprint>CC6A4CDC58A67760D8DFF45C94E53731AF32B911</ManifestCertificateThumbprint>
+    <ManifestCertificateThumbprint>469D3FE6193E622517B23E5D2B5256F8DEDC3CDC</ManifestCertificateThumbprint>
   </PropertyGroup>
   <PropertyGroup Condition="'$(SignManifests)' == 'true'">
     <GenerateManifests>true</GenerateManifests>
