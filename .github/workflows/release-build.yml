@@ -1,0 +1,298 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: windows-2022
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup VS Dev Environment
+      uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+    - name: DisableOutOfProc Fix
+      run: |
+        function Invoke-DisableOutOfProcBuild {
+            param ();
+            $visualStudioWherePath = ('{0}/Microsoft Visual Studio/Installer/vswhere.exe' -f ${Env:ProgramFiles(x86)});
+            $visualStudioInstallationPath = & $visualStudioWherePath -latest -products 'Microsoft.VisualStudio.Product.Enterprise' -property 'installationPath';
+            $currentWorkingDirectory = ('{0}/Common7/IDE/CommonExtensions/Microsoft/VSI/DisableOutOfProcBuild' -f $visualStudioInstallationPath);
+            
+            Set-Location -Path $currentWorkingDirectory;
+            
+            $disableOutOfProcBuildPath = ('{0}/DisableOutOfProcBuild.exe' -f $currentWorkingDirectory);
+            
+            & $disableOutOfProcBuildPath;
+            
+            return;
+        }
+        Invoke-DisableOutOfProcBuild
+      
+    - name: Import Certificate
+      shell: pwsh
+      run: |
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERTIFICATE }}")) {
+          Write-Error "VSTO_CERTIFICATE secret is not set"
+          exit 1
+        }
+
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERT_PASSWORD }}")) {
+          Write-Error "VSTO_CERT_PASSWORD secret is not set"
+          exit 1
+        }
+        
+        Write-Host "Creating certificate file..."
+        $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
+        $certPath = "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx"
+        [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+        Write-Host "Certificate file created at: $certPath"
+        
+        # Verify file exists
+        if (Test-Path $certPath) {
+          Write-Host "Certificate file verified"
+          $fileInfo = Get-Item $certPath
+          Write-Host "File size: $($fileInfo.Length) bytes"
+        } else {
+          Write-Error "Certificate file creation failed"
+          exit 1
+        }
+        
+        Write-Host "Importing certificate to Windows Certificate Store..."
+        try {
+          $certPassword = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
+          
+          # Import to Personal store (My) for current user
+          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\My" -Password $certPassword -Exportable
+          Write-Host "Certificate imported to Personal store with thumbprint: $($cert.Thumbprint)"
+          
+          # Also import to Trusted Publishers store
+          $trustedCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" -Password $certPassword -Exportable
+          Write-Host "Certificate imported to Trusted Publishers store"
+          
+          # Import to Local Machine Personal store for MSBuild access
+          $machineCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\My" -Password $certPassword -Exportable
+          Write-Host "Certificate imported to Local Machine Personal store"
+          
+        } catch {
+          Write-Error "Certificate import failed: $($_.Exception.Message)"
+          exit 1
+        }
+        
+    - name: Verify Certificate Installation
+      shell: pwsh
+      run: |
+        Write-Host "Verifying certificate installation..."
+        $certs = Get-ChildItem -Path "Cert:\CurrentUser\My" | Where-Object { $_.Subject -like "*ppmeta*" -or $_.FriendlyName -like "*ppmeta*" }
+        if ($certs) {
+          foreach ($cert in $certs) {
+            Write-Host "Found certificate: Subject=$($cert.Subject), Thumbprint=$($cert.Thumbprint), HasPrivateKey=$($cert.HasPrivateKey)"
+          }
+        } else {
+          Write-Host "No certificates found in CurrentUser\My store"
+          # List all certificates for debugging
+          Write-Host "All certificates in CurrentUser\My:"
+          Get-ChildItem -Path "Cert:\CurrentUser\My" | ForEach-Object { Write-Host "  $($_.Subject) - $($_.Thumbprint)" }
+        }
+        
+    - name: Restore packages
+      run: nuget restore "${{ github.workspace }}\ppmeta.sln"
+        
+    - name: Build VSTO
+      shell: pwsh
+      run: |
+        Write-Host "Starting VSTO build..."
+        Write-Host "Current directory: $(Get-Location)"
+        Write-Host "Workspace: ${{ github.workspace }}"
+        
+        # Check if certificate file exists
+        $certPath = "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx"
+        if (Test-Path $certPath) {
+          Write-Host "Certificate file exists at: $certPath"
+        } else {
+          Write-Host "Warning: Certificate file not found at: $certPath"
+        }
+        
+        try {
+          msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo -verbosity:normal -flp:logfile=build.log
+        } catch {
+          Write-Error "Build failed: $($_.Exception.Message)"
+          if (Test-Path "build.log") {
+            Write-Host "Build log contents:"
+            Get-Content "build.log" | Write-Host
+          }
+          exit 1
+        }
+        
+    - name: Build Installer
+      shell: pwsh
+      run: |
+        Write-Host "Building installer..."
+        Write-Host "ppSetup project path: ${{ github.workspace }}\ppSetup\ppSetup.vdproj"
+        
+        if (Test-Path "${{ github.workspace }}\ppSetup\ppSetup.vdproj") {
+          Write-Host "ppSetup project file found"
+          
+          # Use devenv to build the installer project
+          devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
+          
+          # Check if build succeeded
+          if (Test-Path "${{ github.workspace }}\ppSetup\Release\ppSetup.msi") {
+            Write-Host "Installer build succeeded: ppSetup.msi created"
+          } else {
+            Write-Error "Installer build failed: ppSetup.msi not found"
+            exit 1
+          }
+        } else {
+          Write-Error "ppSetup project file not found"
+          exit 1
+        }
+
+    - name: Export CA Certificate
+      shell: pwsh
+      run: |
+        Write-Host "Exporting CA certificate..."
+        
+        # Find the certificate we imported
+        $cert = Get-ChildItem -Path "Cert:\CurrentUser\My" | Where-Object { $_.Subject -like "*ppmeta*" -or $_.FriendlyName -like "*ppmeta*" } | Select-Object -First 1
+        
+        if ($cert) {
+          Write-Host "Found certificate: $($cert.Subject)"
+          
+          # Create export directory
+          $exportDir = "${{ github.workspace }}\release"
+          New-Item -ItemType Directory -Path $exportDir -Force
+          
+          # Export certificate as CER (public key only)
+          $certPath = "$exportDir\ppmeta-ca.cer"
+          Export-Certificate -Cert $cert -FilePath $certPath -Type CERT
+          Write-Host "CA certificate exported to: $certPath"
+          
+          # Verify export
+          if (Test-Path $certPath) {
+            $fileInfo = Get-Item $certPath
+            Write-Host "Export successful, file size: $($fileInfo.Length) bytes"
+          } else {
+            Write-Error "Certificate export failed"
+            exit 1
+          }
+        } else {
+          Write-Error "No certificate found for export"
+          exit 1
+        }
+
+    - name: Extract Release Notes from CHANGELOG
+      shell: pwsh
+      run: |
+        Write-Host "Extracting release notes from CHANGELOG.md..."
+        
+        $changelogPath = "${{ github.workspace }}\CHANGELOG.md"
+        $version = "${{ github.ref_name }}"
+        
+        if (Test-Path $changelogPath) {
+          $content = Get-Content $changelogPath -Raw
+          
+          # Extract the first version section (latest release)
+          $pattern = "## \[.*?\] - \d{4}-\d{2}-\d{2}(.*?)(?=## \[|$)"
+          $matches = [regex]::Matches($content, $pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+          
+          if ($matches.Count -gt 0) {
+            $releaseNotes = $matches[0].Groups[1].Value.Trim()
+            
+            # Clean up the release notes
+            $releaseNotes = $releaseNotes -replace "^---[\r\n]*", ""
+            $releaseNotes = $releaseNotes -replace "[\r\n]*\*\*Summary\*\*.*$", ""
+            $releaseNotes = $releaseNotes -replace "[\r\n]*\*\*Next generation usage\*\*.*$", ""
+            $releaseNotes = $releaseNotes.Trim()
+            
+            # Save to file
+            $releaseNotesPath = "${{ github.workspace }}\release\RELEASE_NOTES.md"
+            $releaseNotes | Out-File -FilePath $releaseNotesPath -Encoding UTF8
+            Write-Host "Release notes extracted and saved to: $releaseNotesPath"
+            Write-Host "Release notes preview:"
+            Write-Host $releaseNotes
+          } else {
+            Write-Host "No release notes found in CHANGELOG.md, creating default notes"
+            $defaultNotes = "# Release $version`n`nThis release includes the latest updates and improvements."
+            $defaultNotes | Out-File -FilePath "${{ github.workspace }}\release\RELEASE_NOTES.md" -Encoding UTF8
+          }
+        } else {
+          Write-Host "CHANGELOG.md not found, creating default release notes"
+          $defaultNotes = "# Release $version`n`nThis release includes the latest updates and improvements."
+          $defaultNotes | Out-File -FilePath "${{ github.workspace }}\release\RELEASE_NOTES.md" -Encoding UTF8
+        }
+
+    - name: Prepare Release Package
+      shell: pwsh
+      run: |
+        Write-Host "Preparing release package..."
+        
+        $version = "${{ github.ref_name }}" -replace "^v", ""
+        $releaseDir = "${{ github.workspace }}\release"
+        $packageName = "ppMeta-win-anycpu-$version.zip"
+        
+        # Create release directory if not exists
+        New-Item -ItemType Directory -Path $releaseDir -Force
+        
+        # Copy MSI installer
+        $msiSource = "${{ github.workspace }}\ppSetup\Release\ppSetup.msi"
+        $msiDest = "$releaseDir\ppMeta-$version.msi"
+        
+        if (Test-Path $msiSource) {
+          Copy-Item $msiSource $msiDest
+          Write-Host "MSI copied to: $msiDest"
+        } else {
+          Write-Error "MSI installer not found at: $msiSource"
+          exit 1
+        }
+        
+        # Verify CA certificate exists
+        $certPath = "$releaseDir\ppmeta-ca.cer"
+        if (Test-Path $certPath) {
+          Write-Host "CA certificate found at: $certPath"
+        } else {
+          Write-Error "CA certificate not found at: $certPath"
+          exit 1
+        }
+        
+        # Create release package
+        Write-Host "Creating release package: $packageName"
+        $zipPath = "$releaseDir\$packageName"
+        
+        # Use PowerShell to create zip
+        Compress-Archive -Path "$releaseDir\ppMeta-$version.msi", "$releaseDir\ppmeta-ca.cer" -DestinationPath $zipPath -Force
+        
+        if (Test-Path $zipPath) {
+          $fileInfo = Get-Item $zipPath
+          Write-Host "Release package created successfully: $zipPath"
+          Write-Host "Package size: $($fileInfo.Length) bytes"
+        } else {
+          Write-Error "Failed to create release package"
+          exit 1
+        }
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          release/ppMeta-win-anycpu-*.zip
+        body_path: release/RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Cleanup
+      if: always()
+      shell: pwsh
+      run: |
+        Remove-Item "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx" -ErrorAction SilentlyContinue
+        Write-Host "Temporary files cleaned up"
