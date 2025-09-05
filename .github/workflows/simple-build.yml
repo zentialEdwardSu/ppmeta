@@ -25,6 +25,11 @@ jobs:
           Write-Error "VSTO_CERTIFICATE secret is not set"
           exit 1
         }
+
+        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERT_PASSWORD }}")) {
+          Write-Error "VSTO_CERT_PASSWORD secret is not set"
+          exit 1
+        }
         
         Write-Host "Creating certificate file..."
         $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
@@ -45,13 +50,8 @@ jobs:
         Write-Host "Importing certificate using certutil..."
         try {
           $certPassword = "${{ secrets.VSTO_CERT_PASSWORD }}"
-          if ([string]::IsNullOrEmpty($certPassword)) {
-            # Import without password
-            $result = cmd /c "certutil -f -importpfx `"$certPath`""
-          } else {
-            # Import with password
-            $result = cmd /c "certutil -f -p `"$certPassword`" -importpfx `"$certPath`""
-          }
+
+          $result = cmd /c "certutil -f -p `"$certPassword`" -importpfx `"$certPath`""
           
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Certificate imported successfully using certutil"
@@ -77,18 +77,18 @@ jobs:
         Write-Host "ppmeta directory contents:"
         Get-ChildItem -Path "${{ github.workspace }}\ppmeta" -Name
         Write-Host "Checking project file..."
-        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta.csproj") {
+        if (Test-Path "${{ github.workspace }}\ppmeta\ppmeta.sln") {
           Write-Host "Project file exists"
         } else {
           Write-Host "Project file NOT found"
         }
         
     - name: Build VSTO
-      run: msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
+      run: msbuild "${{ github.workspace }}\ppmeta\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo
         
     - name: Build Installer
-      run: devenv.com "${{ github.workspace }}\ppmeta.sln" /build "Release"
-        
+      run: devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
+
     - name: Upload Results
       uses: actions/upload-artifact@v4
       with:
