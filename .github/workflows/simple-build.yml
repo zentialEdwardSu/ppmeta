@@ -42,11 +42,25 @@ jobs:
           exit 1
         }
         
-        Write-Host "Importing certificate..."
-        $pwd = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
+        Write-Host "Importing certificate using certutil..."
         try {
-          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
-          Write-Host "Certificate imported successfully with thumbprint: $($cert.Thumbprint)"
+          $certPassword = "${{ secrets.VSTO_CERT_PASSWORD }}"
+          if ([string]::IsNullOrEmpty($certPassword)) {
+            # Import without password
+            $result = cmd /c "certutil -f -importpfx `"$certPath`""
+          } else {
+            # Import with password
+            $result = cmd /c "certutil -f -p `"$certPassword`" -importpfx `"$certPath`""
+          }
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Certificate imported successfully using certutil"
+            Write-Host "certutil output: $result"
+          } else {
+            Write-Error "certutil failed with exit code: $LASTEXITCODE"
+            Write-Error "certutil output: $result"
+            exit 1
+          }
         } catch {
           Write-Error "Certificate import failed: $($_.Exception.Message)"
           exit 1
