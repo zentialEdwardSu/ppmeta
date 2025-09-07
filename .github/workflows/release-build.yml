@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -42,88 +43,34 @@ jobs:
       
     - name: Import Certificate
       shell: pwsh
-      run: |
-        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERTIFICATE }}")) {
-          Write-Error "VSTO_CERTIFICATE secret is not set"
-          exit 1
-        }
-
-        if ([string]::IsNullOrEmpty("${{ secrets.VSTO_CERT_PASSWORD }}")) {
-          Write-Error "VSTO_CERT_PASSWORD secret is not set"
-          exit 1
-        }
-        
+      run: |        
         Write-Host "Creating certificate file..."
         $certBytes = [System.Convert]::FromBase64String("${{ secrets.VSTO_CERTIFICATE }}")
         $certPath = "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx"
         [System.IO.File]::WriteAllBytes($certPath, $certBytes)
         Write-Host "Certificate file created at: $certPath"
         
-        # Verify file exists
-        if (Test-Path $certPath) {
-          Write-Host "Certificate file verified"
-          $fileInfo = Get-Item $certPath
-          Write-Host "File size: $($fileInfo.Length) bytes"
-        } else {
-          Write-Error "Certificate file creation failed"
-          exit 1
-        }
-        
         Write-Host "Importing certificate to Windows Certificate Store..."
-        try {
-          $certPassword = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
-          
-          # Import to Personal store (My) for current user
-          $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\My" -Password $certPassword -Exportable
-          Write-Host "Certificate imported to Personal store with thumbprint: $($cert.Thumbprint)"
-          
-          # Also import to Trusted Publishers store
-          $trustedCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" -Password $certPassword -Exportable
-          Write-Host "Certificate imported to Trusted Publishers store"
-          
-          # Import to Local Machine Personal store for MSBuild access
-          $machineCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\My" -Password $certPassword -Exportable
-          Write-Host "Certificate imported to Local Machine Personal store"
-          
-        } catch {
-          Write-Error "Certificate import failed: $($_.Exception.Message)"
-          exit 1
-        }
+        $certPassword = ConvertTo-SecureString "${{ secrets.VSTO_CERT_PASSWORD }}" -AsPlainText -Force
         
-    - name: Verify Certificate Installation
-      shell: pwsh
-      run: |
-        Write-Host "Verifying certificate installation..."
-        $certs = Get-ChildItem -Path "Cert:\CurrentUser\My" | Where-Object { $_.Subject -like "*ppmeta*" -or $_.FriendlyName -like "*ppmeta*" }
-        if ($certs) {
-          foreach ($cert in $certs) {
-            Write-Host "Found certificate: Subject=$($cert.Subject), Thumbprint=$($cert.Thumbprint), HasPrivateKey=$($cert.HasPrivateKey)"
-          }
-        } else {
-          Write-Host "No certificates found in CurrentUser\My store"
-          # List all certificates for debugging
-          Write-Host "All certificates in CurrentUser\My:"
-          Get-ChildItem -Path "Cert:\CurrentUser\My" | ForEach-Object { Write-Host "  $($_.Subject) - $($_.Thumbprint)" }
-        }
+        # Import to Personal store (My) for current user
+        $cert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\My" -Password $certPassword -Exportable
+        Write-Host "Certificate imported to Personal store with thumbprint: $($cert.Thumbprint)"
+        
+        # Also import to Trusted Publishers store
+        $trustedCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" -Password $certPassword -Exportable
+        Write-Host "Certificate imported to Trusted Publishers store"
+        
+        # Import to Local Machine Personal store for MSBuild access
+        $machineCert = Import-PfxCertificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\My" -Password $certPassword -Exportable
+        Write-Host "Certificate imported to Local Machine Personal store"
         
     - name: Restore packages
       run: nuget restore "${{ github.workspace }}\ppmeta.sln"
         
     - name: Build VSTO
       shell: pwsh
-      run: |
-        Write-Host "Starting VSTO build..."
-        Write-Host "Current directory: $(Get-Location)"
-        Write-Host "Workspace: ${{ github.workspace }}"
-        
-        # Check if certificate file exists
-        $certPath = "${{ github.workspace }}\ppmeta\ppmeta_TemporaryKey.pfx"
-        if (Test-Path $certPath) {
-          Write-Host "Certificate file exists at: $certPath"
-        } else {
-          Write-Host "Warning: Certificate file not found at: $certPath"
-        }
-        
+      run: |        
         try {
           msbuild "${{ github.workspace }}\ppmeta.sln" -p:Configuration=Release -p:Platform="Any CPU" -p:VisualStudioVersion="17.0" -nologo -verbosity:normal -flp:logfile=build.log
         } catch {
@@ -138,32 +85,20 @@ jobs:
     - name: Build Installer
       shell: pwsh
       run: |
-        Write-Host "Building installer..."
-        Write-Host "ppSetup project path: ${{ github.workspace }}\ppSetup\ppSetup.vdproj"
+        # Use devenv to build the installer project
+        devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
         
-        if (Test-Path "${{ github.workspace }}\ppSetup\ppSetup.vdproj") {
-          Write-Host "ppSetup project file found"
-          
-          # Use devenv to build the installer project
-          devenv.com "${{ github.workspace }}\ppSetup\ppSetup.vdproj" /build "Release"
-          
-          # Check if build succeeded
-          if (Test-Path "${{ github.workspace }}\ppSetup\Release\ppSetup.msi") {
-            Write-Host "Installer build succeeded: ppSetup.msi created"
-          } else {
-            Write-Error "Installer build failed: ppSetup.msi not found"
-            exit 1
-          }
+        # Check if build succeeded
+        if (Test-Path "${{ github.workspace }}\ppSetup\Release\ppSetup.msi") {
+          Write-Host "Installer build succeeded: ppSetup.msi created"
         } else {
-          Write-Error "ppSetup project file not found"
+          Write-Error "Installer build failed: ppSetup.msi not found"
           exit 1
         }
 
     - name: Export CA Certificate
       shell: pwsh
-      run: |
-        Write-Host "Exporting CA certificate..."
-        
+      run: |        
         # Find the certificate we imported
         $cert = Get-ChildItem -Path "Cert:\CurrentUser\My" | Where-Object { $_.Subject -like "*ppmeta*" -or $_.FriendlyName -like "*ppmeta*" } | Select-Object -First 1
         
