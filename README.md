@@ -10,11 +10,9 @@ ppMeta = (PowerPoint->ppt->pp) + (Meta Data to Create Slide -> Meta)
 
 ## Installation & Uninstallation & Update
 
-1. 你需要先将vsto文件与同名dll放在合适且不会再改变的位置（dll的改变可能导致插件无法正常加载）
-2. 双击.vsto文件
-3. 安装完成，ready to go :)
-4. 卸载：从控制面板像卸载普通软件一样卸载就好了
-5. 直接替换dll，不行的话试试卸载旧版，重装新版（记得备份配置）
+1. 我们为插件加了一个installer与ci！！
+2. 现在只需要从relase下载压缩包，运行setup.exe 就ok了:D
+3. 删除可以直接通过控制面板删除
 
 ## Usage
 
