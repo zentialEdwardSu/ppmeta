@@ -157,7 +157,7 @@ namespace ppmeta
             {
                 string placeholderKey = e.Node.Tag as string;
 
-                Clipboard.SetText($"$()`{placeholderKey}`");
+                Clipboard.SetText($"$()`{placeholderKey}` = ");
                 if (ShareState.Config.AlwaysConfirm)
                     MessageBox.Show($"已复制占位符: $`{placeholderKey}`", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
